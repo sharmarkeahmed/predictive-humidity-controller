@@ -7,7 +7,7 @@
  * Extend this with CRC checks and any device options you need.
  */
 
-#define SHT3X_DEFAULT_TIMEOUT_MS 100
+#define SHT3X_DEFAULT_TIMEOUT_MS 100U
 
 static HAL_StatusTypeDef sht3x_trigger_measurement(sht3x_t *sensor);
 static void sht3x_parse_sample(const uint8_t *raw_data, sht3x_sample_t *sample);
