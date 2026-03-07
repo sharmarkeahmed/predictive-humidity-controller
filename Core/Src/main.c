@@ -22,6 +22,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdbool.h>
+
+#include "sht3x.h"
 
 /* USER CODE END Includes */
 
@@ -51,6 +54,20 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+osThreadId_t sht3xTaskHandle;
+const osThreadAttr_t sht3xTask_attributes = {
+  .name = "Sht3xTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
+
+static sht3x_t sht3x_sensor;
+volatile sht3x_sample_t g_sht3x_sample = {0};
+volatile uint32_t g_sht3x_read_count = 0;
+volatile uint32_t g_sht3x_error_count = 0;
+volatile HAL_StatusTypeDef g_sht3x_last_error = HAL_OK;
+volatile bool g_sht3x_sensor_ready = false;
+volatile bool g_sht3x_sample_valid = false;
 
 /* USER CODE END PV */
 
@@ -59,6 +76,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 void StartDefaultTask(void *argument);
+void StartSht3xTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -127,7 +145,7 @@ int main(void)
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  sht3xTaskHandle = osThreadNew(StartSht3xTask, NULL, &sht3xTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -246,6 +264,51 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+#define SHT3X_I2C_ADDRESS                0x44U
+#define SHT3X_TASK_PERIOD_MS             1000U
+#define SHT3X_TASK_RETRY_DELAY_MS         500U
+
+void StartSht3xTask(void *argument)
+{
+  sht3x_sample_t sample;
+
+  (void)argument;
+
+  for(;;)
+  {
+    if (!sht3x_sensor.initialized)
+    {
+      g_sht3x_sensor_ready = sht3x_init(&sht3x_sensor, &hi2c1, SHT3X_I2C_ADDRESS);
+      g_sht3x_last_error = sht3x_sensor.last_error;
+
+      if (!g_sht3x_sensor_ready)
+      {
+        g_sht3x_sample_valid = false;
+        g_sht3x_error_count++;
+        osDelay(SHT3X_TASK_RETRY_DELAY_MS);
+        continue;
+      }
+    }
+
+    if (sht3x_read(&sht3x_sensor, &sample))
+    {
+      g_sht3x_sample = sample;
+      g_sht3x_last_error = HAL_OK;
+      g_sht3x_sensor_ready = true;
+      g_sht3x_sample_valid = true;
+      g_sht3x_read_count++;
+    }
+    else
+    {
+      g_sht3x_last_error = sht3x_sensor.last_error;
+      g_sht3x_sensor_ready = false;
+      g_sht3x_sample_valid = false;
+      g_sht3x_error_count++;
+    }
+
+    osDelay(SHT3X_TASK_PERIOD_MS);
+  }
+}
 
 /* USER CODE END 4 */
 
