@@ -1,23 +1,23 @@
-#include "humidity_sensor.h"
+#include "sht3x.h"
 
 #include <string.h>
 
 /*
- * This is a device-agnostic scaffold. Replace the placeholder command,
- * parsing, and timing with the requirements for your specific sensor.
+ * Basic SHT3x single-shot read implementation.
+ * Extend this with CRC checks and any device options you need.
  */
 
-#define HUMIDITY_SENSOR_DEFAULT_TIMEOUT_MS 100
+#define SHT3X_DEFAULT_TIMEOUT_MS 100
 
-static HAL_StatusTypeDef humidity_sensor_trigger_measurement(humidity_sensor_t *sensor);
-static void humidity_sensor_parse_sample(const uint8_t *raw_data, humidity_sensor_sample_t *sample);
+static HAL_StatusTypeDef sht3x_trigger_measurement(sht3x_t *sensor);
+static void sht3x_parse_sample(const uint8_t *raw_data, sht3x_sample_t *sample);
 
-/// @brief Initializes the humidity sensor structure with the provided I2C handle and device address.
-/// @param sensor Pointer to the humidity sensor structure to initialize.
+/// @brief Initializes the SHT3x driver structure with the provided I2C handle and device address.
+/// @param sensor Pointer to the SHT3x structure to initialize.
 /// @param hi2c Pointer to the I2C handle to use for communication with the sensor.
-/// @param device_address (7-bit) I2C address of the humidity sensor.
+/// @param device_address (7-bit) I2C address of the SHT3x.
 /// @return true if the initialization was successful, otherwise return false
-bool humidity_sensor_init(humidity_sensor_t *sensor, I2C_HandleTypeDef *hi2c, uint16_t device_address) {
+bool sht3x_init(sht3x_t *sensor, I2C_HandleTypeDef *hi2c, uint16_t device_address) {
     if ((sensor == NULL) || (hi2c == NULL)) {
         return false; // invalid input parameters
     }
@@ -37,8 +37,8 @@ bool humidity_sensor_init(humidity_sensor_t *sensor, I2C_HandleTypeDef *hi2c, ui
     return true;
 }
 
-bool humidity_sensor_read(humidity_sensor_t *sensor,
-                          humidity_sensor_sample_t *sample)
+bool sht3x_read(sht3x_t *sensor,
+                sht3x_sample_t *sample)
 {
     if ((sensor == NULL) || (sample == NULL) || !sensor->initialized) {
         return false; // invalid input parameters
@@ -55,7 +55,7 @@ bool humidity_sensor_read(humidity_sensor_t *sensor,
                                    sensor->device_address,
                                    cmd,
                                    sizeof(cmd),
-                                   HUMIDITY_SENSOR_DEFAULT_TIMEOUT_MS);
+                                   SHT3X_DEFAULT_TIMEOUT_MS);
    
     if (status != HAL_OK) {
         sensor->last_error = status;
@@ -69,7 +69,7 @@ bool humidity_sensor_read(humidity_sensor_t *sensor,
                                   sensor->device_address,
                                   raw,
                                   sizeof(raw),
-                                  HUMIDITY_SENSOR_DEFAULT_TIMEOUT_MS);
+                                  SHT3X_DEFAULT_TIMEOUT_MS);
 
     if (status != HAL_OK) {
         sensor->last_error = status;
