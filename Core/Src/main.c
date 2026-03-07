@@ -61,6 +61,7 @@ const osThreadAttr_t sht3xTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
 
+// Global variables for sharing sensor data and status with other parts of the application.
 static sht3x_t sht3x_sensor;
 volatile sht3x_sample_t g_sht3x_sample = {0};
 volatile uint32_t g_sht3x_read_count = 0;
@@ -264,7 +265,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-#define SHT3X_I2C_ADDRESS                0x44U
+#define SHT3X_I2C_ADDRESS                0x44U // from table 8 of SHT3x datasheet, this is the default address when ADDR pin is low.
 #define SHT3X_TASK_PERIOD_MS             1000U
 #define SHT3X_TASK_RETRY_DELAY_MS         500U
 
