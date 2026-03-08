@@ -8,6 +8,17 @@
  */
 
 #define SHT3X_DEFAULT_TIMEOUT_MS 100U
+#define SHT3X_CRC8_POLYNOMIAL 0x31U // refer to table 20 of SHT3x datasheet for I2C CRC Properties
+#define SHT3X_CRC8_INIT       0xFFU
+
+#define SHT3X_TEMP_MSB_INDEX   0U
+#define SHT3X_TEMP_LSB_INDEX   1U
+#define SHT3X_TEMP_CRC_INDEX   2U
+#define SHT3X_RH_MSB_INDEX     3U
+#define SHT3X_RH_LSB_INDEX     4U
+#define SHT3X_RH_CRC_INDEX     5U
+
+static uint8_t sht3x_crc8(const uint8_t *data, uint8_t len);
 
 /// @brief Initializes the SHT3x driver structure with the provided I2C handle and device address.
 /// @param sensor Pointer to the SHT3x structure to initialize.
@@ -73,18 +84,54 @@ bool sht3x_read(sht3x_t *sensor,
         return false; // failed to read measurement data
     }
 
+    // Verify CRC for both temperature and humidity data
+    uint8_t temp_crc = sht3x_crc8(&raw[SHT3X_TEMP_MSB_INDEX], 2U);
+    uint8_t rh_crc = sht3x_crc8(&raw[SHT3X_RH_MSB_INDEX], 2U);
+
+    if ((temp_crc != raw[SHT3X_TEMP_CRC_INDEX]) || (rh_crc != raw[SHT3X_RH_CRC_INDEX]))
+    {
+        sensor->last_error = HAL_ERROR;
+        return false; // CRC mismatch: discard corrupted sample
+    }
+
     // Convert raw temperature
-    uint16_t raw_temp = ((uint16_t)raw[0] << 8) | raw[1]; // combine the MSB and LSB bits together
+    uint16_t raw_temp = ((uint16_t)raw[SHT3X_TEMP_MSB_INDEX] << 8) |
+                        raw[SHT3X_TEMP_LSB_INDEX];
     sample->temperature_c = -45.0f + 175.0f * ((float)raw_temp / 65535.0f); // temp formula on p. 14 of SHT3x datasheet
 
     // Convert raw humidity
-    uint16_t raw_rh = ((uint16_t)raw[3] << 8) | raw[4]; // combine the MSB and LSB bits together
+    uint16_t raw_rh = ((uint16_t)raw[SHT3X_RH_MSB_INDEX] << 8) |
+                      raw[SHT3X_RH_LSB_INDEX];
     sample->humidity_percent = 100.0f * ((float)raw_rh / 65535.0f); // humidity formula on p. 14 of SHT3x datasheet
 
     sample->sample_tick = xTaskGetTickCount();
 
-    // TODO: add CRC checks for raw data (p. 14 of SHT3x datasheet) to verify data integrity
-
     return true;
 
+}
+
+/// @brief Computes the CRC-8 checksum for the given data using the polynomial specified in the SHT3x datasheet.
+/// @param data Pointer to the input data for which the CRC is to be calculated.
+/// @param len Length of the input data in bytes.
+/// @return The computed CRC-8 checksum as an 8-bit unsigned integer.
+static uint8_t sht3x_crc8(const uint8_t *data, uint8_t len) {
+    uint8_t crc = SHT3X_CRC8_INIT;
+
+    for (uint8_t i = 0; i < len; i++) { // bit by bit polynomial CRC-8 calculation
+        crc ^= data[i];
+
+        for (uint8_t bit = 0; bit < 8; bit++)
+        {
+            if ((crc & 0x80U) != 0U)
+            {
+                crc = (uint8_t)((crc << 1) ^ SHT3X_CRC8_POLYNOMIAL);
+            }
+            else
+            {
+                crc <<= 1;
+            }
+        }
+    }
+
+    return crc;
 }
