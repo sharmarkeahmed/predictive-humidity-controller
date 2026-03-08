@@ -99,7 +99,7 @@ bool sht3x_read(sht3x_t *sensor,
         return false; // failed to send measurement command
     } 
 
-    // Wait for measurement to complete (~15 ms for high repeatability)
+    // Wait for measurement to complete (~15 ms for high repeatability), refer to Table 4
     vTaskDelay(pdMS_TO_TICKS(20));              
     
     status = HAL_I2C_Master_Receive(sensor->hi2c,
