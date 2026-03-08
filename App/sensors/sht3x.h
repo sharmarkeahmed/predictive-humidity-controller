@@ -18,12 +18,23 @@ typedef struct
     uint32_t sample_tick;
 } sht3x_sample_t;
 
+typedef enum
+{
+    SHT3X_RESULT_OK = 0,
+    SHT3X_RESULT_INVALID_ARGUMENT,
+    SHT3X_RESULT_NOT_INITIALIZED,
+    SHT3X_RESULT_I2C_ERROR,
+    SHT3X_RESULT_CRC_ERROR
+} sht3x_result_t;
+
 typedef struct
 {
     I2C_HandleTypeDef *hi2c;
     uint16_t device_address;
     bool initialized;
     HAL_StatusTypeDef last_error;
+    uint32_t last_i2c_error;
+    sht3x_result_t last_result;
 } sht3x_t;
 
 bool sht3x_init(sht3x_t *sensor,
