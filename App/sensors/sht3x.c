@@ -21,17 +21,25 @@ static uint8_t sht3x_crc8(const uint8_t *data, uint8_t len);
 /// @param device_address (7-bit) I2C address of the SHT3x.
 /// @return true if the initialization was successful, otherwise return false
 bool sht3x_init(sht3x_t *sensor, I2C_HandleTypeDef *hi2c, uint16_t device_address) {
-    if ((sensor == NULL) || (hi2c == NULL)) {
-        if (sensor != NULL) {
-            sensor->last_result = SHT3X_RESULT_INVALID_ARGUMENT;
-        }
+    if (sensor == NULL) {
         return false; // invalid input parameters
+    }
+
+    sensor->initialized = false;
+    sensor->last_error = HAL_ERROR;
+    sensor->last_i2c_error = HAL_I2C_ERROR_NONE;
+    sensor->last_result = SHT3X_RESULT_INVALID_ARGUMENT;
+
+    if (hi2c == NULL) {
+        return false; // invalid input parameters
+    }
+
+    if (device_address > 0x7FU) {
+        return false; // expected a 7-bit I2C address
     }
 
     sensor->hi2c = hi2c;
     sensor->device_address = (uint16_t) ( device_address << 1 ); // I2C datasheets give 7-bit, but HAL expects 8-bit
-    
-    sensor->initialized = false;
     sensor->last_error = HAL_OK;
     sensor->last_i2c_error = HAL_I2C_ERROR_NONE;
     sensor->last_result = SHT3X_RESULT_OK;
@@ -48,6 +56,8 @@ bool sht3x_init(sht3x_t *sensor, I2C_HandleTypeDef *hi2c, uint16_t device_addres
     }
 
     sensor->initialized = true;
+    sensor->last_error = HAL_OK;
+    sensor->last_i2c_error = HAL_I2C_ERROR_NONE;
     sensor->last_result = SHT3X_RESULT_OK;
     return true;
 }
