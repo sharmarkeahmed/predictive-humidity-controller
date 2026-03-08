@@ -33,11 +33,6 @@ bool sht3x_init(sht3x_t *sensor,
 bool sht3x_read(sht3x_t *sensor,
                 sht3x_sample_t *sample);
 
-HAL_StatusTypeDef sht3x_read_raw(sht3x_t *sensor,
-                                 uint8_t *buffer,
-                                 uint16_t size,
-                                 uint32_t timeout_ms);
-
 #ifdef __cplusplus
 }
 #endif
