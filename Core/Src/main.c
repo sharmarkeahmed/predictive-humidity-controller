@@ -35,6 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define ENABLE_SHT3X 1 // NOTE: Set 1 to enable SHT3X task, or 0 to disable if not using sensor
 
 /* USER CODE END PD */
 
@@ -146,7 +147,9 @@ int main(void)
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+#if ENABLE_SHT3X
   sht3xTaskHandle = osThreadNew(StartSht3xTask, NULL, &sht3xTask_attributes);
+#endif
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -277,14 +280,15 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 #define SHT3X_I2C_ADDRESS                0x44U // from table 8 of SHT3x datasheet, this is the default address when ADDR pin is low.
-#define SHT3X_TASK_PERIOD_MS             1000U
+#define SHT3X_TASK_PERIOD_MS             5000U // poll the sensor every 5 seconds, which is a reasonable interval for monitoring temperature and humidity in a typical environment without consuming too much power or I2C bus bandwidth.
 #define SHT3X_TASK_RETRY_DELAY_MS         500U
 
 void StartSht3xTask(void *argument)
 {
-  sht3x_sample_t sample;
-
   (void)argument;
+
+#if ENABLE_SHT3X
+  sht3x_sample_t sample;
 
   for(;;)
   {
@@ -322,6 +326,12 @@ void StartSht3xTask(void *argument)
 
     osDelay(SHT3X_TASK_PERIOD_MS);
   }
+#else
+  for(;;)
+  {
+    osDelay(1000);
+  }
+#endif
 }
 
 /* USER CODE END 4 */
