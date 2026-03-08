@@ -9,9 +9,6 @@
 
 #define SHT3X_DEFAULT_TIMEOUT_MS 100U
 
-static HAL_StatusTypeDef sht3x_trigger_measurement(sht3x_t *sensor);
-static void sht3x_parse_sample(const uint8_t *raw_data, sht3x_sample_t *sample);
-
 /// @brief Initializes the SHT3x driver structure with the provided I2C handle and device address.
 /// @param sensor Pointer to the SHT3x structure to initialize.
 /// @param hi2c Pointer to the I2C handle to use for communication with the sensor.
