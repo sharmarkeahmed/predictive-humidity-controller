@@ -5,6 +5,8 @@
 #define SHT3X_CRC8_INIT       0xFFU
 #define SHT3X_CMD_MEASURE_HIGHREP_NO_STRETCH_MSB 0x24U
 #define SHT3X_CMD_MEASURE_HIGHREP_NO_STRETCH_LSB 0x00U
+#define SHT3X_DELAY_HIGHREP_NO_STRETCH_MS        20U // note: per table 4 of SHT3x datasheet, the 
+// max measurement duration for this mode is 15ms, so 20ms should be a safe delay before reading the result.
 
 #define SHT3X_TEMP_MSB_INDEX   0U
 #define SHT3X_TEMP_LSB_INDEX   1U
@@ -80,7 +82,7 @@ bool sht3x_read(sht3x_t *sensor,
     uint8_t cmd[2] = {
         SHT3X_CMD_MEASURE_HIGHREP_NO_STRETCH_MSB,
         SHT3X_CMD_MEASURE_HIGHREP_NO_STRETCH_LSB
-    }; // per p. 10 (table 9) of datasheet, this corresponds to clock stretching disabled, high repeatability enabled, single shot mode
+    }; // Single-shot, high-repeatability, no clock-stretching mode.
     // note that the STM32 HAL should automatically generate other I2C bus control signals
 
     uint8_t raw[6]; // data layout: temp MSB, temp LSB, temp CRC, RH MSB, RH LSB, RH CRC
@@ -99,8 +101,8 @@ bool sht3x_read(sht3x_t *sensor,
         return false; // failed to send measurement command
     } 
 
-    // Wait for measurement to complete (~15 ms for high repeatability), refer to Table 4
-    vTaskDelay(pdMS_TO_TICKS(20));              
+    // A fixed delay is sufficient because this project samples only every few seconds.
+    vTaskDelay(pdMS_TO_TICKS(SHT3X_DELAY_HIGHREP_NO_STRETCH_MS));              
     
     status = HAL_I2C_Master_Receive(sensor->hi2c,
                                   sensor->device_address,
