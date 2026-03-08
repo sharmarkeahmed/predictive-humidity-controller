@@ -1,3 +1,5 @@
 
 .settings/
 EWARM/
+Debug/
+*.launch
