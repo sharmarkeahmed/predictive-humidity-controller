@@ -34,6 +34,7 @@ The firmware is written in **C for STM32 microcontrollers** using the STM32 deve
 Current firmware work includes:
 
 - Sensor interface development
+- FreeRTOS integration
 - Firmware project structure and architecture
 - Initial peripheral configuration
 
