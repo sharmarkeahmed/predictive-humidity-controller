@@ -4,7 +4,12 @@ Embedded environmental controller designed to **predictively regulate indoor hum
 
 This project is being developed as part of **EE4951 Senior Design at the University of Minnesota (Spring 2026)**.
 
-The system monitors indoor environmental conditions and proactively adjusts humidity setpoints based on forecasted outdoor temperatures and modeled humidity response lag in buildings.
+The system monitors indoor environmental conditions and proactively adjusts humidity setpoints based on forecasted outdoor temperatures and modeled humidity response lag in building
+
+---
+
+## System Architecture
+![System Architecture](docs/system-architecture/block-diagram.png)
 
 ---
 
