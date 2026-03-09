@@ -50,7 +50,7 @@ Planned hardware components include:
 
 - STM32 microcontroller
 - SHT3x humidity and temperature sensor
-- TFT display interface
+- LCD display interface
 - ESP8266 WiFi module
 - Custom PCB with integrated power regulation
 
