@@ -3,7 +3,7 @@
 #include <WiFiClientSecure.h>
 #include <Arduino_JSON.h>
 
-#define STM_BAUD 9600
+#define STM_BAUD 115200
 
 const char* WIFI_SSID = "LIT-FAM";
 const char* WIFI_PASS = "Demell2023";
