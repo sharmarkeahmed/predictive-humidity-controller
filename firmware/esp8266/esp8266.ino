@@ -7,7 +7,6 @@
 
 // const char* WIFI_SSID = "LIT-FAM";
 // const char* WIFI_PASS = "Demell2023";
-
 const char* WIFI_SSID = "UofM-IoT";
 const char* WIFI_PASS = "marasmus6operator";
 
@@ -260,7 +259,7 @@ void sendForecastUART() {
   Serial.println(sequence);
 }
 
-/* Old function
+/* 
 void sendForecastUART(){
   Serial.println("Sending forecast to STM32...");
   Serial1.write(0xAA);
