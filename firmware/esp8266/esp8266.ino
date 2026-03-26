@@ -29,6 +29,7 @@ const int FORECAST_HOURS = 8;
 float forecastTemp[FORECAST_HOURS];
 uint8_t forecastRH[FORECAST_HOURS];
 bool forecastValid = false;
+uint8_t forecastStartHour = 0;
 
 // UART sequence counter
 uint8_t sequence = 0;
@@ -131,45 +132,61 @@ String getHTTPRequest(const char* serverName){
 // Helper function to parse the weather forecast data returned by the API server
 // Saves the weather data into arrays 
 bool parseForecast(String json) {
-  // Parse the JSON Data and store it into a JSON variable
-  JSONVar weatherForecast = JSON.parse(json);
-  if (JSON.typeof(weatherForecast) == "undefined") return false;
+    JSONVar weatherForecast = JSON.parse(json);
+    if (JSON.typeof(weatherForecast) == "undefined") return false;
 
-  // Grab the current time
-  JSONVar current = weatherForecast["current"];
-  String currentTime = (const char*) current["time"];
+    JSONVar current = weatherForecast["current"];
+    String currentTime = (const char*) current["time"];  // "2026-03-26T12:30"
 
-  // Grab the hourly Times, temperatures
-  JSONVar hourly = weatherForecast["hourly"];
-  JSONVar times = hourly["time"];
-  JSONVar temperature = hourly["temperature_2m"];
-  JSONVar humidity = hourly["relative_humidity_2m"];
+    // Truncate to hour boundary: "2026-03-26T12:30" → "2026-03-26T12:00"
+    // The hour string is always the first 13 chars + ":00"
+    String currentHour = currentTime.substring(0, 13) + ":00";
 
-  // Find the start index which should be sent to the STM32, This is the hour of your current time
-  int startIndex = 0;
-  for (int i = 0; i < times.length(); i++) {
-    if (String((const char*)times[i]) == currentTime) {
-      startIndex = i;
-      break;
+    JSONVar hourly = weatherForecast["hourly"];
+    JSONVar times = hourly["time"];
+    JSONVar temperature = hourly["temperature_2m"];
+    JSONVar humidity = hourly["relative_humidity_2m"];
+
+    int startIndex = 0;
+    
+    bool found = false;
+    for (int i = 0; i < (int)times.length(); i++) {
+        if (String((const char*)times[i]) == currentHour) {
+            startIndex = i;
+            found = true;
+            break;
+        }
     }
-  }
 
-  Serial.print("Current Hour:" + currentTime);
+    if (!found) {
+        Serial.println("Warning: current hour not found in forecast, defaulting to index 0");
+    }
 
-// Store the forecasts into forecastTemp and forecastRH for the number of FORECAST_HOURS
-  for (int i = 0; i < FORECAST_HOURS; i++) {
-    forecastTemp[i] = (double) temperature[startIndex + i];
-    forecastRH[i] = (int) humidity[startIndex + i];
+    // Extract the hour from the matched time string "2026-03-26T12:00"
+    // Character index:                                0123456789012345
+    // The hour is always at index 11-12
+    String hourStr = currentHour.substring(11, 13);
+    forecastStartHour = (uint8_t)hourStr.toInt();
 
-    Serial.print("Hour ");
-    Serial.print(i);
-    Serial.print(" | Temp: ");
-    Serial.print(forecastTemp[i]);
-    Serial.print(" F | RH: ");
-    Serial.println(forecastRH[i]);
-  }
+    Serial.print("Forecast start hour: ");
+    Serial.println(forecastStartHour);
 
-  return true;
+    Serial.print("Start index: ");
+    Serial.print(startIndex);
+    Serial.print(" | Current hour: ");
+    Serial.println(currentHour);
+
+    for (int i = 0; i < FORECAST_HOURS; i++) {
+        forecastTemp[i] = (double) temperature[startIndex + i];
+        forecastRH[i]   = (int)    humidity[startIndex + i];
+
+        Serial.print("Hour +"); Serial.print(i);
+        Serial.print(" | Temp: "); Serial.print(forecastTemp[i]);
+        Serial.print(" F | RH: "); Serial.println(forecastRH[i]);
+    }
+
+    forecastValid = true;
+    return true;
 }
 
 // Checksum - catches corruptions/bits flipped in the data, Can use this in the STM32 side to see if this cs is the same as the STM cs
@@ -185,33 +202,37 @@ uint8_t computeChecksum(uint8_t* data, int len) {
 // Send UART data to the STM32
 void sendForecastUART() {
 
-  //[START 1 BYTE][PAYLOAD LENGTH 1 BYTE][TEMPERATURES 32 BYTES][HUMIDITY 8 BYTES][END 1 BYTE]
-
   Serial.println("Sending forecast to STM32...");
-  Serial1.write(0xAA);
-  // Start Byte - use an if else on STM side to check
-  // send temperatures (floats = 4 bytes each)
+
+  const int PACKET_SIZE =
+      1 + 1 + (FORECAST_HOURS * sizeof(float)) + FORECAST_HOURS + 1;
+
+  uint8_t packet[PACKET_SIZE];
+  int index = 0;
+
+  packet[index++] = 0xAA;
+  packet[index++] = forecastStartHour;     // Hour (0-23)
+
+
   for(int i = 0; i < FORECAST_HOURS; i++){
-    Serial1.write((uint8_t*)&forecastTemp[i], sizeof(float));
-  } // send humidity (1 byte each) 
-  for(int i = 0; i < FORECAST_HOURS; i++){ 
-    Serial1.write(forecastRH[i]);
-    }
-    Serial1.write(0x55); // END BYTE }
+    memcpy(&packet[index], &forecastTemp[i], sizeof(float));
+    index += sizeof(float);
+  }
+
+  for(int i = 0; i < FORECAST_HOURS; i++){
+    packet[index++] = forecastRH[i];
+  }
+
+  packet[index++] = 0x55;
+
+  Serial1.write(packet, PACKET_SIZE);
+
+  Serial.println("Packet:");
+  for(int i = 0; i < PACKET_SIZE; i++){
+    if(packet[i] < 16) Serial.print("0");
+    Serial.print(packet[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
 }
 
-/* 
-void sendForecastUART(){
-  Serial.println("Sending forecast to STM32...");
-  Serial1.write(0xAA);
-  // Start Byte - use an if else on STM side to check
-  // send temperatures (floats = 4 bytes each)
-  for(int i = 0; i < FORECAST_HOURS; i++){
-    Serial1.write((uint8_t*)&forecastTemp[i], sizeof(float));
-  } // send humidity (1 byte each) 
-  for(int i = 0; i < FORECAST_HOURS; i++){ 
-    Serial1.write(forecastRH[i]);
-    }
-    Serial1.write(0x55); // END BYTE }
-}
-*/
