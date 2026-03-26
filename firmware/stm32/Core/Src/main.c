@@ -23,7 +23,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdbool.h>
+#include <string.h>
 
+#include "esp8266_uart.h"
 #include "sht3x.h"
 
 /* USER CODE END Includes */
@@ -35,7 +37,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ENABLE_SHT3X 1 // NOTE: Set 1 to enable SHT3X task, or 0 to disable if not using sensor
+#define ENABLE_ESP8266_UART 1 // NOTE: Set 1 to enable ESP8266 forecast receive task, or 0 to disable it.
+#define ENABLE_SHT3X 0 // NOTE: Set 1 to enable SHT3X task, or 0 to disable if not using sensor
 
 /* USER CODE END PD */
 
@@ -60,12 +63,27 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+osThreadId_t esp8266TaskHandle;
+const osThreadAttr_t esp8266Task_attributes = {
+  .name = "Esp8266Task",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+
 osThreadId_t sht3xTaskHandle;
 const osThreadAttr_t sht3xTask_attributes = {
   .name = "Sht3xTask",
   .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
+
+static esp8266_uart_t esp8266_uart_state;
+volatile esp8266_forecast_t g_esp8266_forecast = {0};
+volatile uint32_t g_esp8266_frame_count = 0;
+volatile uint32_t g_esp8266_frame_error_count = 0;
+volatile HAL_StatusTypeDef g_esp8266_last_error = HAL_OK;
+volatile bool g_esp8266_uart_ready = false;
+volatile bool g_esp8266_forecast_valid = false;
 
 // Global variables for sharing sensor data and status with other parts of the application.
 static sht3x_t sht3x_sensor;
@@ -88,13 +106,14 @@ static void MX_USART2_UART_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
+void StartEsp8266Task(void *argument);
 void StartSht3xTask(void *argument);
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+extern esp8266_uart_t esp8266_uart_state;
 /* USER CODE END 0 */
 
 /**
@@ -158,6 +177,9 @@ int main(void)
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+#if ENABLE_ESP8266_UART
+  esp8266TaskHandle = osThreadNew(StartEsp8266Task, NULL, &esp8266Task_attributes);
+#endif
 #if ENABLE_SHT3X
   sht3xTaskHandle = osThreadNew(StartSht3xTask, NULL, &sht3xTask_attributes);
 #endif
@@ -428,9 +450,57 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+#define ESP8266_UART_TASK_RX_TIMEOUT_MS   30000U
+#define ESP8266_UART_TASK_RETRY_DELAY_MS   100U
 #define SHT3X_I2C_ADDRESS                0x44U // from table 8 of SHT3x datasheet, this is the default address when ADDR pin is low.
 #define SHT3X_TASK_PERIOD_MS             5000U // poll the sensor every 5 seconds, which is a reasonable interval for monitoring temperature and humidity in a typical environment without consuming too much power or I2C bus bandwidth.
 #define SHT3X_TASK_RETRY_DELAY_MS         500U
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        esp8266_uart_rx_byte(&esp8266_uart_state, esp8266_uart_state.rx_byte);
+        HAL_UART_Receive_IT(&huart1, &esp8266_uart_state.rx_byte, 1);
+    }
+}
+
+void StartEsp8266Task(void *argument)
+{
+    (void)argument;
+
+    esp8266_forecast_t latest_forecast;
+    if (!esp8266_uart_init(&esp8266_uart_state, &huart1))
+    {
+        g_esp8266_last_error = HAL_ERROR;
+        g_esp8266_uart_ready = false;
+        g_esp8266_forecast_valid = false;
+        for(;;) osDelay(ESP8266_UART_TASK_RETRY_DELAY_MS);
+    }
+
+    g_esp8266_uart_ready = true;
+    g_esp8266_last_error = HAL_OK;
+
+    for(;;)
+    {
+        esp8266_uart_clear_forecast_flag(&esp8266_uart_state); // Clear BEFORE waiting
+        if (esp8266_uart_receive_frame(&esp8266_uart_state, ESP8266_UART_TASK_RX_TIMEOUT_MS))
+        {
+            if (esp8266_uart_get_latest_forecast(&esp8266_uart_state, &latest_forecast))
+            {
+                g_esp8266_forecast = latest_forecast;
+                g_esp8266_frame_count = esp8266_uart_state.frame_count;
+                g_esp8266_frame_error_count = esp8266_uart_state.frame_error_count;
+                g_esp8266_last_error = HAL_OK;
+                g_esp8266_forecast_valid = true;
+            }
+        }
+        else
+        {
+            g_esp8266_frame_error_count = esp8266_uart_state.frame_error_count;
+        }
+    }
+}
 
 void StartSht3xTask(void *argument)
 {
