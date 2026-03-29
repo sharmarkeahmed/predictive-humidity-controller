@@ -3,13 +3,14 @@
 #include <WiFiClientSecure.h>
 #include <Arduino_JSON.h>
 
-#define STM_BAUD 9600
+#define STM_BAUD 115200
 
-// const char* WIFI_SSID = "LIT-FAM";
-// const char* WIFI_PASS = "Demell2023";
+const char* WIFI_SSID = "LIT-FAM";
+const char* WIFI_PASS = "Demell2023";
 
-const char* WIFI_SSID = "UofM-IoT";
-const char* WIFI_PASS = "marasmus6operator";
+// const char* WIFI_SSID = "batmans phone";
+// const char* WIFI_PASS = "12345678";
+
 
 // For the weather API endpoint
 String latitude = "44.9716";
@@ -19,8 +20,7 @@ String jsonBuffer;
 
 // Delay for calling the API
 unsigned long lastTime = 0;
-// unsigned long timerDelay = 900000;   // 15 minutes
-unsigned long timerDelay = 6000;
+unsigned long timerDelay = 900000;   // 15 minutes
 
 // number of forecast hours we want
 const int FORECAST_HOURS = 8;
