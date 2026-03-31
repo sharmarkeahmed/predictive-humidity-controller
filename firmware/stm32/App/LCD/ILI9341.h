@@ -75,7 +75,7 @@
 #define ILI9341_TFTHEIGHT  320
 
 /* ---- common 16-bit colour helpers ---- */
-#define ILI9341_BLACK       0x0001
+#define ILI9341_BLACK       0x0000
 #define ILI9341_NAVY        0x000F
 #define ILI9341_DARKGREEN   0x03E0
 #define ILI9341_DARKCYAN    0x03EF
