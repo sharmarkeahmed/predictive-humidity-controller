@@ -1,0 +1,6 @@
+../App/UART/esp8266_uart.c:5:6:esp8266_uart_init	16	static
+../App/UART/esp8266_uart.c:20:6:esp8266_uart_rx_byte	24	static
+../App/UART/esp8266_uart.c:56:6:esp8266_uart_poll_frame	24	static
+../App/UART/esp8266_uart.c:73:6:esp8266_uart_receive_frame	16	static
+../App/UART/esp8266_uart.c:79:6:esp8266_uart_get_latest_forecast	16	static
+../App/UART/esp8266_uart.c:86:6:esp8266_uart_clear_forecast_flag	16	static

@@ -1,0 +1,3 @@
+../App/sensors/sht3x.c:25:6:sht3x_init	5
+../App/sensors/sht3x.c:67:6:sht3x_read	9
+../App/sensors/sht3x.c:155:16:sht3x_crc8	4
