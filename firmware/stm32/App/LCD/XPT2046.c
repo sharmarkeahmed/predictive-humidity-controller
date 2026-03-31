@@ -46,7 +46,7 @@ void XPT2046_init(XPT2046_t *dev, SPI_HandleTypeDef *hspi,
     dev->yraw     = 0;
     dev->zraw     = 0;
     dev->msraw    = 0;
-    dev->rotation = 1;
+    dev->rotation = 0;
     dev->minx     = 0;
     dev->maxx     = 4095;
     dev->miny     = 0;
@@ -113,11 +113,10 @@ void XPT2046_setRotation(XPT2046_t *dev, uint8_t rotation)
 }
 
 /*
- * XPT2046_update()
+ * XPT2046_updateInternal()
  *
- * Force flag removed: the msraw throttle is kept but isrWake guard is
- * bypassed when called from XPT2046_updateForced() so calibration can
- * always get a fresh reading regardless of ISR state.
+ * Fixed rotation mapping to match ILI9341 display orientation
+ * The mapping ensures touch coordinates align with display pixels
  */
 static void XPT2046_updateInternal(XPT2046_t *dev, bool force)
 {
@@ -125,8 +124,6 @@ static void XPT2046_updateInternal(XPT2046_t *dev, bool force)
 
     uint32_t now = HAL_GetTick();
 
-    /* Force bypasses the time throttle too so waitTouch always gets
-     * a fresh sample after its debounce delay */
     if (!force && (now - dev->msraw) < XPT2046_MSEC_THRESHOLD) return;
 
     int16_t data[6];
@@ -171,24 +168,29 @@ static void XPT2046_updateInternal(XPT2046_t *dev, bool force)
     int16_t x = besttwoavg(data[0], data[2], data[4]);
     int16_t y = besttwoavg(data[1], data[3], data[5]);
 
+    /* Raw coordinates from touch controller (0-4095) */
+    int16_t raw_x = x;
+    int16_t raw_y = y;
+
+    /* Apply rotation to match display orientation */
     switch (dev->rotation) {
-    case 0:
-        dev->xraw = 4095 - y;
-        dev->yraw = x;
-        break;
-    case 1:
-        dev->xraw = x;
-        dev->yraw = y;
-        break;
-    case 2:
-        dev->xraw = y;
-        dev->yraw = 4095 - x;
-        break;
-    default:
-        dev->xraw = 4095 - x;
-        dev->yraw = 4095 - y;
-        break;
-    }
+       case 0:
+           dev->raw_x = 4095 - y;
+           dev->raw_y = x;
+           break;
+       case 1:
+           dev->raw_x = x;
+           dev->raw_y = y;
+           break;
+       case 2:
+           dev->raw_x = y;
+           dev->raw_y = 4095 - x;
+           break;
+       default: /* 3 */
+           dev->raw_x = 4095 - x;
+           dev->raw_y = 4095 - y;
+           break;
+       }
 }
 
 void XPT2046_update(XPT2046_t *dev)
@@ -198,39 +200,29 @@ void XPT2046_update(XPT2046_t *dev)
 
 /*
  * XPT2046_waitTouch()
- *
- * Uses GPIO pin directly for both the touch-present and touch-released
- * checks so it works regardless of ISR/isrWake state. After confirming
- * the pin is still low after debounce, forces a fresh SPI read so the
- * returned point always contains valid data.
  */
 TS_Point XPT2046_waitTouch(XPT2046_t *ts)
 {
     TS_Point p = {0, 0, 0};
 
-    /* Wait for pin to go low (touch present) – works with or without ISR */
     while (HAL_GPIO_ReadPin(ts->irq_port, ts->irq_pin) == GPIO_PIN_SET)
         osDelay(10);
 
-    osDelay(50);  /* debounce */
+    osDelay(50);
 
-    /* Confirm still touching after debounce */
     if (HAL_GPIO_ReadPin(ts->irq_port, ts->irq_pin) == GPIO_PIN_SET)
-        return p;  /* spurious, return zeroed point */
+        return p;
 
-    /* Force a fresh SPI read bypassing isrWake and time throttle */
     ts->isrWake = true;
-    ts->msraw   = 0;  /* reset throttle timestamp so update() proceeds */
+    ts->msraw   = 0;
     XPT2046_updateInternal(ts, true);
 
     p.x = ts->xraw;
     p.y = ts->yraw;
     p.z = ts->zraw;
 
-    /* Wait for finger lift */
     while (HAL_GPIO_ReadPin(ts->irq_port, ts->irq_pin) == GPIO_PIN_RESET)
         osDelay(10);
 
     return p;
 }
-
