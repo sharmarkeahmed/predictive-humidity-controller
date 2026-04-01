@@ -9,6 +9,7 @@ extern "C" {
 #include <stdint.h>
 
 #include "stm32f4xx_hal.h"
+#include "stm32f4xx_hal_i2c.h"
 #include "cmsis_os.h"
 
 typedef struct

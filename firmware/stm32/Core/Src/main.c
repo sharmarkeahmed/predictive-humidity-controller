@@ -24,10 +24,13 @@
 /* USER CODE BEGIN Includes */
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "esp8266_uart.h"
 #include "sht3x.h"
 
+#include "XPT2046.h"
+#include "ILI9341.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,8 +40,30 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ENABLE_ESP8266_UART 1 // NOTE: Set 1 to enable ESP8266 forecast receive task, or 0 to disable it.
-#define ENABLE_SHT3X 0 // NOTE: Set 1 to enable SHT3X task, or 0 to disable if not using sensor
+#define ENABLE_ESP8266_UART  0  /* Set 1 to enable ESP8266 forecast receive task */
+#define ENABLE_SHT3X         0  /* Set 1 to enable SHT3X task                   */
+#define ENABLE_LCD_SPI1      1  /* Set 1 to enable LCD task                      */
+
+/* --- Display GPIO (all on GPIOB) ----------------------------------------- */
+#define TFT_RST_PORT   GPIOB
+#define TFT_RST_PIN    GPIO_PIN_5
+
+#define TFT_CS_PORT    GPIOB
+#define TFT_CS_PIN     GPIO_PIN_6
+
+#define TFT_DC_PORT    GPIOB
+#define TFT_DC_PIN     GPIO_PIN_7
+
+/* --- Touchscreen GPIO ---------------------------------------------------- */
+#define TS_CS_PORT     GPIOB
+#define TS_CS_PIN      GPIO_PIN_4
+
+#define TS_IRQ_PORT    GPIOB
+#define TS_IRQ_PIN     GPIO_PIN_2   /* EXTI2, falling edge, pull-up */
+
+/* --- Touch poll interval -------------------------------------------------- */
+#define TOUCH_POLL_MS       20U   /* GPIO check interval                      */
+#define TOUCH_DEBOUNCE_MS   50U   /* confirm delay after first detection       */
 
 /* USER CODE END PD */
 
@@ -48,7 +73,9 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2;
+
+SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim1;
 
@@ -63,52 +90,73 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
+
+/* --- RTOS thread handles -------------------------------------------------- */
 osThreadId_t esp8266TaskHandle;
 const osThreadAttr_t esp8266Task_attributes = {
-  .name = "Esp8266Task",
+  .name       = "Esp8266Task",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority   = (osPriority_t) osPriorityLow,
 };
 
 osThreadId_t sht3xTaskHandle;
 const osThreadAttr_t sht3xTask_attributes = {
-  .name = "Sht3xTask",
+  .name       = "Sht3xTask",
   .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
+  .priority   = (osPriority_t) osPriorityBelowNormal,
 };
 
-static esp8266_uart_t esp8266_uart_state;
-volatile esp8266_forecast_t g_esp8266_forecast = {0};
-volatile uint32_t g_esp8266_frame_count = 0;
-volatile uint32_t g_esp8266_frame_error_count = 0;
-volatile HAL_StatusTypeDef g_esp8266_last_error = HAL_OK;
-volatile bool g_esp8266_uart_ready = false;
-volatile bool g_esp8266_forecast_valid = false;
+osThreadId_t lcdTaskHandle;
+const osThreadAttr_t lcdTask_attributes = {
+  .name       = "LCDTask",
+  .stack_size = 512 * 4,   /* increased: printf + display buffers */
+  .priority   = (osPriority_t) osPriorityBelowNormal,
+};
 
-// Global variables for sharing sensor data and status with other parts of the application.
-static sht3x_t sht3x_sensor;
-volatile sht3x_sample_t g_sht3x_sample = {0};
-volatile uint32_t g_sht3x_read_count = 0;
-volatile uint32_t g_sht3x_error_count = 0;
-volatile HAL_StatusTypeDef g_sht3x_last_error = HAL_OK;
-volatile bool g_sht3x_sensor_ready = false;
-volatile bool g_sht3x_sample_valid = false;
+/* --- Touch semaphore ---------------------------------------------------- */
+osSemaphoreId_t touchSemHandle;
+const osSemaphoreAttr_t touchSem_attributes = {
+  .name = "touchSem"
+};
+
+/* --- Display / touch driver instances ------------------------------------ */
+ILI9341_t3  tft;   /* populated by ILI9341_init() in StartLCDTask          */
+XPT2046_t   ts;    /* populated by XPT2046_init() in StartLCDTask           */
+
+/* --- ESP8266 globals ------------------------------------------------------- */
+static esp8266_uart_t        esp8266_uart_state;
+volatile esp8266_forecast_t  g_esp8266_forecast        = {0};
+volatile uint32_t            g_esp8266_frame_count     = 0;
+volatile uint32_t            g_esp8266_frame_error_count = 0;
+volatile HAL_StatusTypeDef   g_esp8266_last_error      = HAL_OK;
+volatile bool                g_esp8266_uart_ready      = false;
+volatile bool                g_esp8266_forecast_valid  = false;
+
+/* --- SHT3x globals -------------------------------------------------------- */
+static sht3x_t               sht3x_sensor;
+volatile sht3x_sample_t      g_sht3x_sample      = {0};
+volatile uint32_t            g_sht3x_read_count  = 0;
+volatile uint32_t            g_sht3x_error_count = 0;
+volatile HAL_StatusTypeDef   g_sht3x_last_error  = HAL_OK;
+volatile bool                g_sht3x_sensor_ready = false;
+volatile bool                g_sht3x_sample_valid = false;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_I2C1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_SPI1_Init(void);
+static void MX_I2C2_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 void StartEsp8266Task(void *argument);
 void StartSht3xTask(void *argument);
-
+void StartLCDTask(void *argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -124,7 +172,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -133,43 +180,38 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
   /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_I2C1_Init();
   MX_TIM1_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
+  MX_SPI1_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
-
   /* USER CODE END 2 */
 
   /* Init scheduler */
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
+  touchSemHandle = osSemaphoreNew(1, 0, &touchSem_attributes);
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -183,10 +225,12 @@ int main(void)
 #if ENABLE_SHT3X
   sht3xTaskHandle = osThreadNew(StartSht3xTask, NULL, &sht3xTask_attributes);
 #endif
+#if ENABLE_LCD_SPI1
+  lcdTaskHandle = osThreadNew(StartLCDTask, NULL, &lcdTask_attributes);
+#endif
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
-  /* add events, ... */
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
@@ -247,36 +291,74 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief I2C1 Initialization Function
+  * @brief I2C2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2C1_Init(void)
+static void MX_I2C2_Init(void)
 {
 
-  /* USER CODE BEGIN I2C1_Init 0 */
+  /* USER CODE BEGIN I2C2_Init 0 */
 
-  /* USER CODE END I2C1_Init 0 */
+  /* USER CODE END I2C2_Init 0 */
 
-  /* USER CODE BEGIN I2C1_Init 1 */
+  /* USER CODE BEGIN I2C2_Init 1 */
 
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 100000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
+  /* USER CODE BEGIN I2C2_Init 2 */
 
-  /* USER CODE END I2C1_Init 2 */
+  /* USER CODE END I2C2_Init 2 */
+
+}
+
+/**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
 
 }
 
@@ -429,7 +511,11 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7
+                          |GPIO_PIN_8|GPIO_PIN_9, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
@@ -437,71 +523,454 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC0 PC1 PC2 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2;
+  /*Configure GPIO pins : PC4 PC5 PC6 PC7
+                           PC8 PC9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7
+                          |GPIO_PIN_8|GPIO_PIN_9;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : PB2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB5 PB6 PB7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI2_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* PB4 (TS_CS) – touch chip-select, start high (deselected) */
+  GPIO_InitStruct.Pin   = GPIO_PIN_4;
+  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull  = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_4, GPIO_PIN_SET);
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
-#define ESP8266_UART_TASK_RX_TIMEOUT_MS   30000U
-#define ESP8266_UART_TASK_RETRY_DELAY_MS   100U
-#define SHT3X_I2C_ADDRESS                0x44U // from table 8 of SHT3x datasheet, this is the default address when ADDR pin is low.
-#define SHT3X_TASK_PERIOD_MS             5000U // poll the sensor every 5 seconds, which is a reasonable interval for monitoring temperature and humidity in a typical environment without consuming too much power or I2C bus bandwidth.
-#define SHT3X_TASK_RETRY_DELAY_MS         500U
 
+/* --------------------------------------------------------------------------
+ * Constants used by application tasks
+ * -------------------------------------------------------------------------- */
+#define ESP8266_UART_TASK_RX_TIMEOUT_MS  30000U
+#define ESP8266_UART_TASK_RETRY_DELAY_MS   100U
+
+#define SHT3X_I2C_ADDRESS     0x44U
+#define SHT3X_TASK_PERIOD_MS  5000U
+#define SHT3X_TASK_RETRY_DELAY_MS 500U
+
+/* --------------------------------------------------------------------------
+ * UART receive interrupt – ESP8266
+ * -------------------------------------------------------------------------- */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    if (huart->Instance == USART1)
-    {
-        esp8266_uart_rx_byte(&esp8266_uart_state, esp8266_uart_state.rx_byte);
-        HAL_UART_Receive_IT(&huart1, &esp8266_uart_state.rx_byte, 1);
-    }
+  if (huart->Instance == USART1)
+  {
+    esp8266_uart_rx_byte(&esp8266_uart_state, esp8266_uart_state.rx_byte);
+    HAL_UART_Receive_IT(&huart1, &esp8266_uart_state.rx_byte, 1);
+  }
 }
 
-void StartEsp8266Task(void *argument)
+/* --------------------------------------------------------------------------
+ * HAL_GPIO_EXTI_Callback
+ * No touch IRQ handling needed - touch is polled via GPIO + SPI.
+ * PC13 (user button) IRQ is cleared here to prevent Default_Handler trap.
+ * -------------------------------------------------------------------------- */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == TS_IRQ_PIN)
+    {
+        XPT2046_irqHandler(&ts);
+
+        /* Wake the LCD task – use FromISR-safe FreeRTOS call */
+        osSemaphoreRelease(touchSemHandle);
+    }
+    /* PC13 user button – not used */
+}
+///* --------------------------------------------------------------------------
+// * draw touch point
+// * -------------------------------------------------------------------------- */
+//static void draw_point(int16_t x, int16_t y)
+//{
+//  ILI9341_fillCircle(&tft, x, y, 5, ILI9341_RED);
+//}
+
+/* Touch calibration structure */
+typedef struct {
+    int16_t x_min;      /* Minimum X raw value (usually top-left) */
+    int16_t x_max;      /* Maximum X raw value (usually bottom-right) */
+    int16_t y_min;      /* Minimum Y raw value (usually top-left) */
+    int16_t y_max;      /* Maximum Y raw value (usually bottom-right) */
+    bool calibrated;
+} TouchCalibration;
+
+TouchCalibration touch_cal = {0};
+
+
+// BUNCH OF HELPER FUNCTIONS FOR DEBUG UNCOMMENT, NOT CALLED IN MAIN
+///* Function to display calibration instructions and wait for touch */
+//TS_Point wait_for_touch_with_indicator(XPT2046_t *ts, ILI9341_t3 *tft,
+//                                        int16_t target_x, int16_t target_y,
+//                                        const char *message)
+//{
+//    TS_Point point;
+//
+//    /* Clear area and show instruction */
+//    ILI9341_fillRect(tft, 0, tft->_height - 40, tft->_width, 40, ILI9341_BLACK);
+//    ILI9341_setTextSize(tft, 1);
+//    ILI9341_setTextColorBG(tft, ILI9341_YELLOW, ILI9341_BLACK);
+//    ILI9341_setCursor(tft, 10, tft->_height - 30);
+//    ILI9341_writeString(tft, message);
+//
+//    /* Draw target circle */
+//    ILI9341_fillCircle(tft, target_x, target_y, 10, ILI9341_RED);
+//    ILI9341_drawCircle(tft, target_x, target_y, 12, ILI9341_WHITE);
+//
+//    /* Wait for touch */
+//    while (1) {
+//        if (XPT2046_touched(ts)) {
+//            point = XPT2046_getPoint(ts);
+//
+//            /* Show raw values while touching */
+//            char raw_str[32];
+//            ILI9341_fillRect(tft, 0, tft->_height - 20, 200, 20, ILI9341_BLACK);
+//            ILI9341_setTextSize(tft, 1);
+//            ILI9341_setTextColorBG(tft, ILI9341_CYAN, ILI9341_BLACK);
+//            ILI9341_setCursor(tft, 10, tft->_height - 15);
+//            sprintf(raw_str, "Raw: X=%4d Y=%4d", point.x, point.y);
+//            ILI9341_writeString(tft, raw_str);
+//
+//            /* Wait for touch release */
+//            while (XPT2046_touched(ts)) {
+//                osDelay(10);
+//            }
+//
+//            /* Confirm with user */
+//            ILI9341_fillRect(tft, 0, tft->_height - 40, tft->_width, 40, ILI9341_BLACK);
+//            ILI9341_setTextColorBG(tft, ILI9341_GREEN, ILI9341_BLACK);
+//            ILI9341_setCursor(tft, 10, tft->_height - 30);
+//            ILI9341_writeString(tft, "Touch registered! Releasing...");
+//            osDelay(500);
+//
+//            break;
+//        }
+//        osDelay(10);
+//    }
+//
+//    /* Clear the target circle */
+//    ILI9341_fillCircle(tft, target_x, target_y, 12, ILI9341_BLACK);
+//
+//    return point;
+//}
+//
+///* Calibration routine */
+//bool calibrate_touchscreen(XPT2046_t *ts, ILI9341_t3 *tft)
+//{
+//    TS_Point points[4];
+//    int16_t screen_points[4][2] = {
+//        {10, 10},           /* Top-left */
+//        {tft->_width - 10, 10},  /* Top-right */
+//        {10, tft->_height - 10}, /* Bottom-left */
+//        {tft->_width - 10, tft->_height - 10}  /* Bottom-right */
+//    };
+//
+//    const char *messages[] = {
+//        "Touch the RED circle at TOP-LEFT corner",
+//        "Touch the RED circle at TOP-RIGHT corner",
+//        "Touch the RED circle at BOTTOM-LEFT corner",
+//        "Touch the RED circle at BOTTOM-RIGHT corner"
+//    };
+//
+//    ILI9341_fillScreen(tft, ILI9341_BLACK);
+//    ILI9341_setTextSize(tft, 2);
+//    ILI9341_setTextColorBG(tft, ILI9341_WHITE, ILI9341_BLACK);
+//    ILI9341_setCursor(tft, 10, 10);
+//    ILI9341_writeString(tft, "Touch Screen Calibration");
+//    ILI9341_setCursor(tft, 10, 40);
+//    ILI9341_writeString(tft, "Follow the instructions");
+//    osDelay(2000);
+//
+//    /* Collect calibration points */
+//    for (int i = 0; i < 4; i++) {
+//        points[i] = wait_for_touch_with_indicator(ts, tft,
+//                                                   screen_points[i][0],
+//                                                   screen_points[i][1],
+//                                                   messages[i]);
+//
+//        /* Validate raw values are within range */
+//        if (points[i].x < 0 || points[i].x > 4095 ||
+//            points[i].y < 0 || points[i].y > 4095) {
+//            ILI9341_fillScreen(tft, ILI9341_BLACK);
+//            ILI9341_setTextColorBG(tft, ILI9341_RED, ILI9341_BLACK);
+//            ILI9341_setCursor(tft, 10, 10);
+//            ILI9341_writeString(tft, "Calibration Error!");
+//            ILI9341_setCursor(tft, 10, 40);
+//            ILI9341_writeString(tft, "Invalid touch values");
+//            osDelay(2000);
+//            return false;
+//        }
+//    }
+//
+//    /* Calculate min/max values */
+//    touch_cal.x_min = points[0].x;
+//    touch_cal.x_max = points[0].x;
+//    touch_cal.y_min = points[0].y;
+//    touch_cal.y_max = points[0].y;
+//
+//    for (int i = 1; i < 4; i++) {
+//        if (points[i].x < touch_cal.x_min) touch_cal.x_min = points[i].x;
+//        if (points[i].x > touch_cal.x_max) touch_cal.x_max = points[i].x;
+//        if (points[i].y < touch_cal.y_min) touch_cal.y_min = points[i].y;
+//        if (points[i].y > touch_cal.y_max) touch_cal.y_max = points[i].y;
+//    }
+//
+//    /* Add a small margin */
+//    touch_cal.x_min -= 20;
+//    touch_cal.x_max += 20;
+//    touch_cal.y_min -= 20;
+//    touch_cal.y_max += 20;
+//
+//    /* Clamp to valid range */
+//    if (touch_cal.x_min < 0) touch_cal.x_min = 0;
+//    if (touch_cal.x_max > 4095) touch_cal.x_max = 4095;
+//    if (touch_cal.y_min < 0) touch_cal.y_min = 0;
+//    if (touch_cal.y_max > 4095) touch_cal.y_max = 4095;
+//
+//    touch_cal.calibrated = true;
+//
+//    /* Show calibration results */
+//    ILI9341_fillScreen(tft, ILI9341_BLACK);
+//    ILI9341_setTextSize(tft, 2);
+//    ILI9341_setTextColorBG(tft, ILI9341_GREEN, ILI9341_BLACK);
+//    ILI9341_setCursor(tft, 10, 10);
+//    ILI9341_writeString(tft, "Calibration Complete!");
+//
+//    ILI9341_setTextSize(tft, 1);
+//    ILI9341_setTextColorBG(tft, ILI9341_WHITE, ILI9341_BLACK);
+//    ILI9341_setCursor(tft, 10, 50);
+//    char buf[64];
+//    sprintf(buf, "X Range: %d - %d", touch_cal.x_min, touch_cal.x_max);
+//    ILI9341_writeString(tft, buf);
+//    ILI9341_setCursor(tft, 10, 70);
+//    sprintf(buf, "Y Range: %d - %d", touch_cal.y_min, touch_cal.y_max);
+//    ILI9341_writeString(tft, buf);
+//
+//    ILI9341_setCursor(tft, 10, 100);
+//    ILI9341_writeString(tft, "Touch anywhere to test");
+//
+//    /* Test calibration */
+//    while (1) {
+//        if (XPT2046_touched(ts)) {
+//            TS_Point test = XPT2046_getPoint(ts);
+//
+//            /* Convert raw to screen coordinates */
+//            int16_t screen_x = (int16_t)((uint32_t)(test.x - touch_cal.x_min) *
+//                                         tft->_width / (touch_cal.x_max - touch_cal.x_min));
+//            int16_t screen_y = (int16_t)((uint32_t)(test.y - touch_cal.y_min) *
+//                                         tft->_height / (touch_cal.y_max - touch_cal.y_min));
+//
+//            /* Clamp to screen bounds */
+//            if (screen_x < 0) screen_x = 0;
+//            if (screen_x >= tft->_width) screen_x = tft->_width - 1;
+//            if (screen_y < 0) screen_y = 0;
+//            if (screen_y >= tft->_height) screen_y = tft->_height - 1;
+//
+//            /* Show calibrated coordinates */
+//            ILI9341_fillRect(tft, 10, 130, 220, 50, ILI9341_BLACK);
+//            ILI9341_setTextSize(tft, 2);
+//            ILI9341_setTextColorBG(tft, ILI9341_YELLOW, ILI9341_BLACK);
+//            ILI9341_setCursor(tft, 10, 130);
+//            sprintf(buf, "X:%3d Y:%3d", screen_x, screen_y);
+//            ILI9341_writeString(tft, buf);
+//
+//            /* Draw touch point */
+//            ILI9341_fillCircle(tft, screen_x, screen_y, 5, ILI9341_RED);
+//
+//            /* Wait for touch release */
+//            while (XPT2046_touched(ts)) {
+//                osDelay(10);
+//            }
+//
+//            /* Clear touch point */
+//            ILI9341_fillCircle(tft, screen_x, screen_y, 5, ILI9341_BLACK);
+//        }
+//        osDelay(10);
+//    }
+//
+//    return true;
+//}
+//
+///* Function to convert raw touch coordinates to screen coordinates */
+//bool touch_to_screen(XPT2046_t *ts, int16_t *screen_x, int16_t *screen_y)
+//{
+//    if (!touch_cal.calibrated) {
+//        return false;
+//    }
+//
+//    TS_Point raw = XPT2046_getPoint(ts);
+//
+//    /* Apply rotation first (if needed) */
+//    int16_t raw_x = raw.x;
+//    int16_t raw_y = raw.y;
+//
+//    /* Convert raw values to screen coordinates using calibration */
+//    *screen_x = (int16_t)((uint32_t)(raw_x - touch_cal.x_min) *
+//                          ILI9341_width(&tft) / (touch_cal.x_max - touch_cal.x_min));
+//    *screen_y = (int16_t)((uint32_t)(raw_y - touch_cal.y_min) *
+//                          ILI9341_height(&tft) / (touch_cal.y_max - touch_cal.y_min));
+//
+//    /* Clamp to screen bounds */
+//    if (*screen_x < 0) *screen_x = 0;
+//    if (*screen_x >= ILI9341_width(&tft)) *screen_x = ILI9341_width(&tft) - 1;
+//    if (*screen_y < 0) *screen_y = 0;
+//    if (*screen_y >= ILI9341_height(&tft)) *screen_y = ILI9341_height(&tft) - 1;
+//
+//    return true;
+//}
+
+void initLCD(void){
+	/* Hard reset */
+	    HAL_GPIO_WritePin(TFT_CS_PORT,  TFT_CS_PIN,  GPIO_PIN_SET);
+	    HAL_GPIO_WritePin(TFT_DC_PORT,  TFT_DC_PIN,  GPIO_PIN_SET);
+	    HAL_GPIO_WritePin(TFT_RST_PORT, TFT_RST_PIN, GPIO_PIN_SET);
+	    osDelay(10);
+	    HAL_GPIO_WritePin(TFT_RST_PORT, TFT_RST_PIN, GPIO_PIN_RESET);
+	    osDelay(20);
+	    HAL_GPIO_WritePin(TFT_RST_PORT, TFT_RST_PIN, GPIO_PIN_SET);
+	    osDelay(150);
+}
+
+static void lcd_draw_idle(void)
+{
+  ILI9341_fillScreen(&tft, ILI9341_BLACK);
+  ILI9341_setTextSize(&tft, 2);
+  ILI9341_setTextColorBG(&tft, ILI9341_YELLOW, ILI9341_BLACK);
+
+  const char *msg = "Touch anywhere";
+  uint16_t tw = ILI9341_measureTextWidth (&tft, msg, 0);
+  uint16_t th = ILI9341_measureTextHeight(&tft, msg, 0);
+  ILI9341_setCursor(&tft,
+                    (ILI9341_width (&tft) - (int16_t)tw) / 2,
+                    (ILI9341_height(&tft) - (int16_t)th) / 2);
+  ILI9341_writeString(&tft, msg);
+}
+
+/* Updated StartLCDTask with calibration */
+void StartLCDTask(void *argument)
 {
     (void)argument;
+    char text[32];
 
-    esp8266_forecast_t latest_forecast;
-    if (!esp8266_uart_init(&esp8266_uart_state, &huart1))
-    {
-        g_esp8266_last_error = HAL_ERROR;
-        g_esp8266_uart_ready = false;
-        g_esp8266_forecast_valid = false;
-        for(;;) osDelay(ESP8266_UART_TASK_RETRY_DELAY_MS);
-    }
+    initLCD();
+    /* Init display */
+    ILI9341_init(&tft,
+                 &hspi1,
+                 TFT_CS_PORT,  TFT_CS_PIN,
+                 TFT_DC_PORT,  TFT_DC_PIN,
+                 TFT_RST_PORT, TFT_RST_PIN);
+    ILI9341_begin(&tft);
+    ILI9341_setRotation(&tft, 1);
+    ILI9341_fillScreen(&tft, ILI9341_BLACK);
 
-    g_esp8266_uart_ready = true;
-    g_esp8266_last_error = HAL_OK;
+    /* Init touch */
+    XPT2046_init(&ts,
+                 &hspi1,
+                 TS_CS_PORT,  TS_CS_PIN,
+                 TS_IRQ_PORT, TS_IRQ_PIN);
+    XPT2046_begin(&ts);
 
-    for(;;)
-    {
-        esp8266_uart_clear_forecast_flag(&esp8266_uart_state); // Clear BEFORE waiting
-        if (esp8266_uart_receive_frame(&esp8266_uart_state, ESP8266_UART_TASK_RX_TIMEOUT_MS))
-        {
-            if (esp8266_uart_get_latest_forecast(&esp8266_uart_state, &latest_forecast))
-            {
-                g_esp8266_forecast = latest_forecast;
-                g_esp8266_frame_count = esp8266_uart_state.frame_count;
-                g_esp8266_frame_error_count = esp8266_uart_state.frame_error_count;
-                g_esp8266_last_error = HAL_OK;
-                g_esp8266_forecast_valid = true;
-            }
-        }
-        else
-        {
-            g_esp8266_frame_error_count = esp8266_uart_state.frame_error_count;
-        }
-    }
+    /* IMPORTANT: Don't set touch rotation - we'll handle mapping via calibration */
+    XPT2046_setRotation(&ts, 1);  /* Raw mode, no rotation */
+
+    /* Run calibration */
+//    ILI9341_fillScreen(&tft, ILI9341_BLACK);
+//    calibrate_touchscreen(&ts, &tft);
+
+    /* The calibration function runs indefinitely for testing */
+    /* If you want to exit calibration after testing, you would need to add a timeout or button press */
+    lcd_draw_idle();
+
+     for (;;)
+     {
+
+       TS_Point p;
+
+       /* Poll every 20 ms – yields CPU to other tasks between checks */
+       osDelay(20);
+
+       /* Fast GPIO pre-check: T_IRQ HIGH = no touch, skip SPI entirely */
+       if (!XPT2046_touched(&ts))
+         continue;
+
+       /* Debounce: wait 50 ms then confirm touch is still present */
+       osDelay(50);
+       if (!XPT2046_touched(&ts))
+         continue;
+
+       /* Read position – single SPI transaction */
+       p = XPT2046_getPoint(&ts);
+       if (p.z < XPT2046_Z_THRESHOLD)
+         continue;
+
+       /* Map 12-bit ADC (0-4095) → pixel coords */
+       int16_t px = (int16_t)((p.x * (uint32_t)ILI9341_width (&tft)) / 4096);
+       int16_t py = (int16_t)((p.y * (uint32_t)ILI9341_height(&tft)) / 4096);
+       if (px < 0)                     px = 0;
+       if (py < 0)                     py = 0;
+       if (px >= ILI9341_width (&tft)) px = ILI9341_width (&tft)  - 1;
+       if (py >= ILI9341_height(&tft)) py = ILI9341_height(&tft) - 1;
+
+       /* Redraw screen */
+       snprintf(text, sizeof(text), "X:%-4d  Y:%-4d", (int)px, (int)py);
+
+       ILI9341_fillScreen(&tft, ILI9341_BLACK);
+       ILI9341_setTextSize(&tft, 2);
+       ILI9341_setTextColorBG(&tft, ILI9341_YELLOW, ILI9341_BLACK);
+       {
+         uint16_t tw = ILI9341_measureTextWidth (&tft, text, 0);
+         uint16_t th = ILI9341_measureTextHeight(&tft, text, 0);
+         ILI9341_setCursor(&tft,
+                           (ILI9341_width (&tft) - (int16_t)tw) / 2,
+                           (ILI9341_height(&tft) - (int16_t)th) / 2);
+       }
+       ILI9341_writeString(&tft, text);
+
+//       lcdDrawCursor(); // Create cursor object
+       ILI9341_drawFastHLine(&tft, px - 10, py,      21, ILI9341_RED);
+       ILI9341_drawFastVLine(&tft, px,      py - 10, 21, ILI9341_RED);
+       ILI9341_fillCircle   (&tft, px, py, 4, ILI9341_RED);
+
+       /* Wait for finger-lift */
+       do { osDelay(20); } while (XPT2046_touched(&ts));
+
+       /* Restore idle screen */
+       lcd_draw_idle();
+     }
 }
 
+/* --------------------------------------------------------------------------
+ * SHT3x task (unchanged from original)
+ * -------------------------------------------------------------------------- */
 void StartSht3xTask(void *argument)
 {
   (void)argument;
@@ -509,12 +978,12 @@ void StartSht3xTask(void *argument)
 #if ENABLE_SHT3X
   sht3x_sample_t sample;
 
-  for(;;)
+  for (;;)
   {
     if (!sht3x_sensor.initialized)
     {
       g_sht3x_sensor_ready = sht3x_init(&sht3x_sensor, &hi2c1, SHT3X_I2C_ADDRESS);
-      g_sht3x_last_error = sht3x_sensor.last_error;
+      g_sht3x_last_error   = sht3x_sensor.last_error;
 
       if (!g_sht3x_sensor_ready)
       {
@@ -527,15 +996,15 @@ void StartSht3xTask(void *argument)
 
     if (sht3x_read(&sht3x_sensor, &sample))
     {
-      g_sht3x_sample = sample;
-      g_sht3x_last_error = HAL_OK;
+      g_sht3x_sample       = sample;
+      g_sht3x_last_error   = HAL_OK;
       g_sht3x_sensor_ready = true;
       g_sht3x_sample_valid = true;
       g_sht3x_read_count++;
     }
     else
     {
-      g_sht3x_last_error = sht3x_sensor.last_error;
+      g_sht3x_last_error   = sht3x_sensor.last_error;
       g_sht3x_sensor_ready = false;
       g_sht3x_sample_valid = false;
       g_sht3x_error_count++;
@@ -544,10 +1013,7 @@ void StartSht3xTask(void *argument)
     osDelay(SHT3X_TASK_PERIOD_MS);
   }
 #else
-  for(;;)
-  {
-    osDelay(1000);
-  }
+  for (;;) osDelay(1000);
 #endif
 }
 
