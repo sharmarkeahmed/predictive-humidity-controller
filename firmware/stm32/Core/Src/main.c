@@ -35,16 +35,30 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum
+{
+  HUMIDITY_LED_IDLE = 0,
+  HUMIDITY_LED_INCREASING,
+  HUMIDITY_LED_DECREASING
+} HumidityLedState_t;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define ENABLE_ESP8266_UART  0  /* Set 1 to enable ESP8266 forecast receive task */
-#define ENABLE_SHT3X         0  /* Set 1 to enable SHT3X task                   */
-#define ENABLE_LCD_SPI1      1  /* Set 1 to enable LCD task                      */
 
-/* --- Display GPIO (all on GPIOB) ----------------------------------------- */
+#define ENABLE_ESP8266_UART  0
+#define ENABLE_SHT3X         0
+#define ENABLE_LCD_SPI1      1
+
+/* --- Humidity status LEDs on GPIOC --- */
+#define HUMIDITY_LED_GREEN_PORT   GPIOC
+#define HUMIDITY_LED_GREEN_PIN    GPIO_PIN_4
+
+#define HUMIDITY_LED_RED_PORT     GPIOC
+#define HUMIDITY_LED_RED_PIN      GPIO_PIN_5
+
+/* --- Display GPIO --- */
 #define TFT_RST_PORT   GPIOB
 #define TFT_RST_PIN    GPIO_PIN_5
 
@@ -54,16 +68,15 @@
 #define TFT_DC_PORT    GPIOB
 #define TFT_DC_PIN     GPIO_PIN_7
 
-/* --- Touchscreen GPIO ---------------------------------------------------- */
+/* --- Touchscreen GPIO --- */
 #define TS_CS_PORT     GPIOB
 #define TS_CS_PIN      GPIO_PIN_4
 
 #define TS_IRQ_PORT    GPIOB
-#define TS_IRQ_PIN     GPIO_PIN_2   /* EXTI2, falling edge, pull-up */
+#define TS_IRQ_PIN     GPIO_PIN_2
 
-/* --- Touch poll interval -------------------------------------------------- */
-#define TOUCH_POLL_MS       20U   /* GPIO check interval                      */
-#define TOUCH_DEBOUNCE_MS   50U   /* confirm delay after first detection       */
+#define TOUCH_POLL_MS       20U
+#define TOUCH_DEBOUNCE_MS   50U
 
 /* USER CODE END PD */
 
@@ -196,6 +209,8 @@ int main(void)
   MX_SPI1_Init();
   MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
+	HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_RESET);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -568,7 +583,57 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// Local helper prototypes
+static void HumidityLED_SetState(HumidityLedState_t state);
+static void HumidityLED_UpdateFromControl(float target_humidity,
+                                          float current_humidity,
+                                          float deadband_percent);
 
+/* --------------------------------------------------------------------------
+ * Humidity LED helpers
+ * PC4 = Green LED  -> increasing humidity
+ * PC5 = Red LED    -> decreasing humidity
+ * Both off         -> idle / within deadband
+ * -------------------------------------------------------------------------- */
+static void HumidityLED_SetState(HumidityLedState_t state)
+{
+  switch (state)
+  {
+    case HUMIDITY_LED_INCREASING:
+      HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_RESET);
+      break;
+
+    case HUMIDITY_LED_DECREASING:
+      HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_SET);
+      break;
+
+    case HUMIDITY_LED_IDLE:
+    default:
+      HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_RESET);
+      break;
+  }
+}
+
+static void HumidityLED_UpdateFromControl(float target_humidity,
+                                          float current_humidity,
+                                          float deadband_percent)
+{
+  if (current_humidity < (target_humidity - deadband_percent))
+  {
+    HumidityLED_SetState(HUMIDITY_LED_INCREASING);
+  }
+  else if (current_humidity > (target_humidity + deadband_percent))
+  {
+    HumidityLED_SetState(HUMIDITY_LED_DECREASING);
+  }
+  else
+  {
+    HumidityLED_SetState(HUMIDITY_LED_IDLE);
+  }
+}
 /* --------------------------------------------------------------------------
  * Constants used by application tasks
  * -------------------------------------------------------------------------- */
@@ -1029,14 +1094,20 @@ void StartSht3xTask(void *argument)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  /* Infinite loop */
+
   for(;;)
   {
-    osDelay(1);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
+    osDelay(500);
+
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_SET);
+    osDelay(500);
   }
+
   /* USER CODE END 5 */
 }
-
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM5 interrupt took place, inside
