@@ -31,34 +31,22 @@
 
 #include "XPT2046.h"
 #include "ILI9341.h"
+
+#include "ControlLoop.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum
-{
-  HUMIDITY_LED_IDLE = 0,
-  HUMIDITY_LED_INCREASING,
-  HUMIDITY_LED_DECREASING
-} HumidityLedState_t;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define ENABLE_ESP8266_UART  1  /* Set 1 to enable ESP8266 forecast receive task */
+#define ENABLE_SHT3X         1  /* Set 1 to enable SHT3X task                   */
+#define ENABLE_LCD_SPI1      1  /* Set 1 to enable LCD task                      */
 
-#define ENABLE_ESP8266_UART  0
-#define ENABLE_SHT3X         0
-#define ENABLE_LCD_SPI1      1
-
-/* --- Humidity status LEDs on GPIOC --- */
-#define HUMIDITY_LED_GREEN_PORT   GPIOC
-#define HUMIDITY_LED_GREEN_PIN    GPIO_PIN_4
-
-#define HUMIDITY_LED_RED_PORT     GPIOC
-#define HUMIDITY_LED_RED_PIN      GPIO_PIN_5
-
-/* --- Display GPIO --- */
+/* --- Display GPIO (all on GPIOB) ----------------------------------------- */
 #define TFT_RST_PORT   GPIOB
 #define TFT_RST_PIN    GPIO_PIN_5
 
@@ -68,15 +56,16 @@ typedef enum
 #define TFT_DC_PORT    GPIOB
 #define TFT_DC_PIN     GPIO_PIN_7
 
-/* --- Touchscreen GPIO --- */
+/* --- Touchscreen GPIO ---------------------------------------------------- */
 #define TS_CS_PORT     GPIOB
 #define TS_CS_PIN      GPIO_PIN_4
 
 #define TS_IRQ_PORT    GPIOB
-#define TS_IRQ_PIN     GPIO_PIN_2
+#define TS_IRQ_PIN     GPIO_PIN_2   /* EXTI2, falling edge, pull-up */
 
-#define TOUCH_POLL_MS       20U
-#define TOUCH_DEBOUNCE_MS   50U
+/* --- Touch poll interval -------------------------------------------------- */
+#define TOUCH_POLL_MS       20U   /* GPIO check interval                      */
+#define TOUCH_DEBOUNCE_MS   50U   /* confirm delay after first detection       */
 
 /* USER CODE END PD */
 
@@ -86,7 +75,7 @@ typedef enum
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c2;
+I2C_HandleTypeDef hi2c1;
 
 SPI_HandleTypeDef hspi1;
 
@@ -126,6 +115,13 @@ const osThreadAttr_t lcdTask_attributes = {
   .priority   = (osPriority_t) osPriorityBelowNormal,
 };
 
+osThreadId_t controlTaskHandle;
+const osThreadAttr_t controlTask_attributes = {
+  .name       = "ControlTask",
+  .stack_size = 256 * 4,
+  .priority   = (osPriority_t) osPriorityAboveNormal,
+};
+
 /* --- Touch semaphore ---------------------------------------------------- */
 osSemaphoreId_t touchSemHandle;
 const osSemaphoreAttr_t touchSem_attributes = {
@@ -163,13 +159,14 @@ static void MX_TIM1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
-static void MX_I2C2_Init(void);
+static void MX_I2C1_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 void StartEsp8266Task(void *argument);
 void StartSht3xTask(void *argument);
 void StartLCDTask(void *argument);
+void StartControlTask(void *argument);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -207,10 +204,8 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
-  MX_I2C2_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-	HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_RESET);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -243,6 +238,7 @@ int main(void)
 #if ENABLE_LCD_SPI1
   lcdTaskHandle = osThreadNew(StartLCDTask, NULL, &lcdTask_attributes);
 #endif
+  controlTaskHandle = osThreadNew(StartControlTask, NULL, &controlTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -306,36 +302,36 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief I2C2 Initialization Function
+  * @brief I2C1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2C2_Init(void)
+static void MX_I2C1_Init(void)
 {
 
-  /* USER CODE BEGIN I2C2_Init 0 */
+  /* USER CODE BEGIN I2C1_Init 0 */
 
-  /* USER CODE END I2C2_Init 0 */
+  /* USER CODE END I2C1_Init 0 */
 
-  /* USER CODE BEGIN I2C2_Init 1 */
+  /* USER CODE BEGIN I2C1_Init 1 */
 
-  /* USER CODE END I2C2_Init 1 */
-  hi2c2.Instance = I2C2;
-  hi2c2.Init.ClockSpeed = 100000;
-  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c2.Init.OwnAddress1 = 0;
-  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c2.Init.OwnAddress2 = 0;
-  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C2_Init 2 */
+  /* USER CODE BEGIN I2C1_Init 2 */
 
-  /* USER CODE END I2C2_Init 2 */
+  /* USER CODE END I2C1_Init 2 */
 
 }
 
@@ -526,8 +522,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7
-                          |GPIO_PIN_8|GPIO_PIN_9, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
@@ -538,13 +533,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC4 PC5 PC6 PC7
-                           PC8 PC9 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7
-                          |GPIO_PIN_8|GPIO_PIN_9;
+  /*Configure GPIO pins : PC0 PC1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PB2 */
@@ -583,57 +582,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// Local helper prototypes
-static void HumidityLED_SetState(HumidityLedState_t state);
-static void HumidityLED_UpdateFromControl(float target_humidity,
-                                          float current_humidity,
-                                          float deadband_percent);
 
-/* --------------------------------------------------------------------------
- * Humidity LED helpers
- * PC4 = Green LED  -> increasing humidity
- * PC5 = Red LED    -> decreasing humidity
- * Both off         -> idle / within deadband
- * -------------------------------------------------------------------------- */
-static void HumidityLED_SetState(HumidityLedState_t state)
-{
-  switch (state)
-  {
-    case HUMIDITY_LED_INCREASING:
-      HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_SET);
-      HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_RESET);
-      break;
-
-    case HUMIDITY_LED_DECREASING:
-      HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_SET);
-      break;
-
-    case HUMIDITY_LED_IDLE:
-    default:
-      HAL_GPIO_WritePin(HUMIDITY_LED_GREEN_PORT, HUMIDITY_LED_GREEN_PIN, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(HUMIDITY_LED_RED_PORT,   HUMIDITY_LED_RED_PIN,   GPIO_PIN_RESET);
-      break;
-  }
-}
-
-static void HumidityLED_UpdateFromControl(float target_humidity,
-                                          float current_humidity,
-                                          float deadband_percent)
-{
-  if (current_humidity < (target_humidity - deadband_percent))
-  {
-    HumidityLED_SetState(HUMIDITY_LED_INCREASING);
-  }
-  else if (current_humidity > (target_humidity + deadband_percent))
-  {
-    HumidityLED_SetState(HUMIDITY_LED_DECREASING);
-  }
-  else
-  {
-    HumidityLED_SetState(HUMIDITY_LED_IDLE);
-  }
-}
 /* --------------------------------------------------------------------------
  * Constants used by application tasks
  * -------------------------------------------------------------------------- */
@@ -654,6 +603,51 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     esp8266_uart_rx_byte(&esp8266_uart_state, esp8266_uart_state.rx_byte);
     HAL_UART_Receive_IT(&huart1, &esp8266_uart_state.rx_byte, 1);
   }
+}
+
+void StartEsp8266Task(void *argument)
+{
+    (void)argument;
+
+#if ENABLE_ESP8266_UART
+
+    // Initialize UART driver
+    g_esp8266_uart_ready = esp8266_uart_init(&esp8266_uart_state, &huart1);
+
+    for (;;)
+    {
+        if (!g_esp8266_uart_ready)
+        {
+            osDelay(ESP8266_UART_TASK_RETRY_DELAY_MS);
+            continue;
+        }
+
+        // Wait for a full forecast frame
+        if (esp8266_uart_receive_frame(&esp8266_uart_state,
+                                       ESP8266_UART_TASK_RX_TIMEOUT_MS))
+        {
+            if (esp8266_uart_get_latest_forecast(&esp8266_uart_state,
+                                                 (esp8266_forecast_t*)&g_esp8266_forecast))
+            {
+                g_esp8266_forecast_valid = true;
+                g_esp8266_frame_count++;
+            }
+
+            esp8266_uart_clear_forecast_flag(&esp8266_uart_state);
+        }
+        else
+        {
+            g_esp8266_frame_error_count++;
+            osDelay(ESP8266_UART_TASK_RETRY_DELAY_MS);
+        }
+    }
+
+#else
+    for (;;)
+    {
+        osDelay(1000);
+    }
+#endif
 }
 
 /* --------------------------------------------------------------------------
@@ -925,112 +919,90 @@ void initLCD(void){
 	    osDelay(150);
 }
 
-static void lcd_draw_idle(void)
-{
-  ILI9341_fillScreen(&tft, ILI9341_BLACK);
-  ILI9341_setTextSize(&tft, 2);
-  ILI9341_setTextColorBG(&tft, ILI9341_YELLOW, ILI9341_BLACK);
-
-  const char *msg = "Touch anywhere";
-  uint16_t tw = ILI9341_measureTextWidth (&tft, msg, 0);
-  uint16_t th = ILI9341_measureTextHeight(&tft, msg, 0);
-  ILI9341_setCursor(&tft,
-                    (ILI9341_width (&tft) - (int16_t)tw) / 2,
-                    (ILI9341_height(&tft) - (int16_t)th) / 2);
-  ILI9341_writeString(&tft, msg);
-}
-
-/* Updated StartLCDTask with calibration */
 void StartLCDTask(void *argument)
 {
     (void)argument;
-    char text[32];
 
-    initLCD();
-    /* Init display */
-    ILI9341_init(&tft,
-                 &hspi1,
-                 TFT_CS_PORT,  TFT_CS_PIN,
-                 TFT_DC_PORT,  TFT_DC_PIN,
+    // ===== HARD RESET LCD =====
+    HAL_GPIO_WritePin(TFT_CS_PORT, TFT_CS_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(TFT_DC_PORT, TFT_DC_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(TFT_RST_PORT, TFT_RST_PIN, GPIO_PIN_SET);
+    osDelay(10);
+    HAL_GPIO_WritePin(TFT_RST_PORT, TFT_RST_PIN, GPIO_PIN_RESET);
+    osDelay(20);
+    HAL_GPIO_WritePin(TFT_RST_PORT, TFT_RST_PIN, GPIO_PIN_SET);
+    osDelay(150);
+
+    // ===== INIT LCD =====
+    ILI9341_init(&tft, &hspi1,
+                 TFT_CS_PORT, TFT_CS_PIN,
+                 TFT_DC_PORT, TFT_DC_PIN,
                  TFT_RST_PORT, TFT_RST_PIN);
+
     ILI9341_begin(&tft);
+    osDelay(50);
     ILI9341_setRotation(&tft, 1);
+
+    // ===== INIT TOUCH =====
+    HAL_GPIO_WritePin(TS_CS_PORT, TS_CS_PIN, GPIO_PIN_SET);
+
+    XPT2046_init(&ts, &hspi1,
+                 TS_CS_PORT, TS_CS_PIN,
+                 TS_IRQ_PORT, TS_IRQ_PIN);
+
+    XPT2046_begin(&ts);
+    XPT2046_setRotation(&ts, 1);
+
+    // ===== CLEAR SCREEN =====
     ILI9341_fillScreen(&tft, ILI9341_BLACK);
 
-    /* Init touch */
-    XPT2046_init(&ts,
-                 &hspi1,
-                 TS_CS_PORT,  TS_CS_PIN,
-                 TS_IRQ_PORT, TS_IRQ_PIN);
-    XPT2046_begin(&ts);
+    // ===== CALIBRATION =====
+    // calibrate_touchscreen(&ts, &tft);
 
-    /* IMPORTANT: Don't set touch rotation - we'll handle mapping via calibration */
-    XPT2046_setRotation(&ts, 1);  /* Raw mode, no rotation */
+    // ===== MAIN LOOP =====
+    for (;;)
+    {
+        // ===== ALWAYS UPDATE DISPLAY =====
 
-    /* Run calibration */
-//    ILI9341_fillScreen(&tft, ILI9341_BLACK);
-//    calibrate_touchscreen(&ts, &tft);
+        ILI9341_setTextColor(&tft, ILI9341_WHITE);
+        ILI9341_setTextSize(&tft, 2);
 
-    /* The calibration function runs indefinitely for testing */
-    /* If you want to exit calibration after testing, you would need to add a timeout or button press */
-    lcd_draw_idle();
+        ILI9341_setCursor(&tft, 10, 10);
+        ILI9341_writeString(&tft, "Forecast:");
 
-     for (;;)
-     {
+        char buf[32];
 
-       TS_Point p;
+        for (int i = 0; i < 8; i++)
+        {
+            int y = 40 + i * 20;
+            int temp10 = (int)(g_esp8266_forecast.temperature_f[i] * 10);
+            // clear ONLY this row
+            ILI9341_fillRect(&tft, 10, y, 220, 18, ILI9341_BLACK);
 
-       /* Poll every 20 ms – yields CPU to other tasks between checks */
-       osDelay(20);
+            snprintf(buf, sizeof(buf),
+                     "%02d:%3d.%dF %3d%%",
+                     i,
+                     temp10 / 10,
+                     abs(temp10 % 10),
+                     g_esp8266_forecast.humidity_percent[i]);
 
-       /* Fast GPIO pre-check: T_IRQ HIGH = no touch, skip SPI entirely */
-       if (!XPT2046_touched(&ts))
-         continue;
+            ILI9341_setCursor(&tft, 10, y);
+            ILI9341_writeString(&tft, buf);
+        }
 
-       /* Debounce: wait 50 ms then confirm touch is still present */
-       osDelay(50);
-       if (!XPT2046_touched(&ts))
-         continue;
+        // ===== OPTIONAL TOUCH HANDLING =====
+        if (XPT2046_touched(&ts))
+        {
+            TS_Point p = XPT2046_getPoint(&ts);
 
-       /* Read position – single SPI transaction */
-       p = XPT2046_getPoint(&ts);
-       if (p.z < XPT2046_Z_THRESHOLD)
-         continue;
+            int16_t px = (p.x * ILI9341_width(&tft)) / 4096;
+            int16_t py = (p.y * ILI9341_height(&tft)) / 4096;
 
-       /* Map 12-bit ADC (0-4095) → pixel coords */
-       int16_t px = (int16_t)((p.x * (uint32_t)ILI9341_width (&tft)) / 4096);
-       int16_t py = (int16_t)((p.y * (uint32_t)ILI9341_height(&tft)) / 4096);
-       if (px < 0)                     px = 0;
-       if (py < 0)                     py = 0;
-       if (px >= ILI9341_width (&tft)) px = ILI9341_width (&tft)  - 1;
-       if (py >= ILI9341_height(&tft)) py = ILI9341_height(&tft) - 1;
+            ILI9341_fillCircle(&tft, px, py, 4, ILI9341_RED);
+        }
 
-       /* Redraw screen */
-       snprintf(text, sizeof(text), "X:%-4d  Y:%-4d", (int)px, (int)py);
-
-       ILI9341_fillScreen(&tft, ILI9341_BLACK);
-       ILI9341_setTextSize(&tft, 2);
-       ILI9341_setTextColorBG(&tft, ILI9341_YELLOW, ILI9341_BLACK);
-       {
-         uint16_t tw = ILI9341_measureTextWidth (&tft, text, 0);
-         uint16_t th = ILI9341_measureTextHeight(&tft, text, 0);
-         ILI9341_setCursor(&tft,
-                           (ILI9341_width (&tft) - (int16_t)tw) / 2,
-                           (ILI9341_height(&tft) - (int16_t)th) / 2);
-       }
-       ILI9341_writeString(&tft, text);
-
-//       lcdDrawCursor(); // Create cursor object
-       ILI9341_drawFastHLine(&tft, px - 10, py,      21, ILI9341_RED);
-       ILI9341_drawFastVLine(&tft, px,      py - 10, 21, ILI9341_RED);
-       ILI9341_fillCircle   (&tft, px, py, 4, ILI9341_RED);
-
-       /* Wait for finger-lift */
-       do { osDelay(20); } while (XPT2046_touched(&ts));
-
-       /* Restore idle screen */
-       lcd_draw_idle();
-     }
+        osDelay(500); // update twice per second
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -1082,6 +1054,32 @@ void StartSht3xTask(void *argument)
 #endif
 }
 
+void StartControlTask(void *argument)
+{
+    (void)argument;
+
+    ControlLoop_Init();
+
+    for (;;)
+    {
+    	static float fake_humidity = 45.0f;
+
+    	// Simple system response model
+    	float response = (g_control_pwm / 100.0f) * 0.2f;  // tune this
+    	fake_humidity += response;
+
+    	// Clamp realistic humidity
+    	if (fake_humidity > 100) fake_humidity = 100;
+    	if (fake_humidity < 0)   fake_humidity = 0;
+
+    	// Feed into your system
+    	g_sht3x_sample.humidity_percent = fake_humidity;
+    	g_sht3x_sample.sample_tick = HAL_GetTick();
+    	g_sht3x_sample_valid = true;
+        ControlLoop_Update();
+        osDelay(50);
+    }
+}
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -1094,20 +1092,14 @@ void StartSht3xTask(void *argument)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-
+  /* Infinite loop */
   for(;;)
   {
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
-    osDelay(500);
-
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_SET);
-    osDelay(500);
+    osDelay(1);
   }
-
   /* USER CODE END 5 */
 }
+
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM5 interrupt took place, inside
