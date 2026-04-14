@@ -48,7 +48,7 @@ typedef enum
 /* USER CODE BEGIN PD */
 
 #define ENABLE_ESP8266_UART  0
-#define ENABLE_SHT3X         0
+#define ENABLE_SHT3X         1
 #define ENABLE_LCD_SPI1      1
 
 /* --- Humidity status LEDs on GPIOC --- */
@@ -1047,7 +1047,7 @@ void StartSht3xTask(void *argument)
   {
     if (!sht3x_sensor.initialized)
     {
-      g_sht3x_sensor_ready = sht3x_init(&sht3x_sensor, &hi2c1, SHT3X_I2C_ADDRESS);
+      g_sht3x_sensor_ready = sht3x_init(&sht3x_sensor, &hi2c2, SHT3X_I2C_ADDRESS);
       g_sht3x_last_error   = sht3x_sensor.last_error;
 
       if (!g_sht3x_sensor_ready)
