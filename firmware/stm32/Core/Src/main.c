@@ -585,15 +585,15 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 // Local helper prototypes
 static void HumidityLED_SetState(HumidityLedState_t state);
-static void HumidityLED_UpdateFromControl(float target_humidity,
-                                          float current_humidity,
-                                          float deadband_percent);
+static void HumidityLED_UpdateFromTrend(float current_humidity,
+                                        float previous_humidity,
+                                        float deadband_percent);
 
 /* --------------------------------------------------------------------------
  * Humidity LED helpers
- * PC4 = Green LED  -> increasing humidity
- * PC5 = Red LED    -> decreasing humidity
- * Both off         -> idle / within deadband
+ * PC4 = Green LED  -> humidity increasing
+ * PC5 = Red LED    -> humidity decreasing
+ * Both off         -> humidity unchanged / within deadband
  * -------------------------------------------------------------------------- */
 static void HumidityLED_SetState(HumidityLedState_t state)
 {
@@ -617,15 +617,17 @@ static void HumidityLED_SetState(HumidityLedState_t state)
   }
 }
 
-static void HumidityLED_UpdateFromControl(float target_humidity,
-                                          float current_humidity,
-                                          float deadband_percent)
+static void HumidityLED_UpdateFromTrend(float current_humidity,
+                                        float previous_humidity,
+                                        float deadband_percent)
 {
-  if (current_humidity < (target_humidity - deadband_percent))
+  float delta = current_humidity - previous_humidity;
+
+  if (delta > deadband_percent)
   {
     HumidityLED_SetState(HUMIDITY_LED_INCREASING);
   }
-  else if (current_humidity > (target_humidity + deadband_percent))
+  else if (delta < -deadband_percent)
   {
     HumidityLED_SetState(HUMIDITY_LED_DECREASING);
   }
@@ -1094,20 +1096,48 @@ void StartSht3xTask(void *argument)
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+  (void)argument;
 
-  for(;;)
+  float previous_humidity = 0.0f;
+  float current_humidity  = 0.0f;
+  bool first_sample = true;
+
+  /* Adjust this to avoid flicker from tiny sensor noise */
+  const float humidity_deadband = 0.5f;   // percent RH
+
+  for (;;)
   {
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
-    osDelay(500);
+    if (g_sht3x_sample_valid)
+    {
+      current_humidity = g_sht3x_sample.humidity_percent;
 
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_SET);
-    osDelay(500);
+      if (first_sample)
+      {
+        previous_humidity = current_humidity;
+        HumidityLED_SetState(HUMIDITY_LED_IDLE);
+        first_sample = false;
+      }
+      else
+      {
+        HumidityLED_UpdateFromTrend(current_humidity,
+                                    previous_humidity,
+                                    humidity_deadband);
+
+        previous_humidity = current_humidity;
+      }
+    }
+    else
+    {
+      /* No valid sensor reading yet -> both LEDs off */
+      HumidityLED_SetState(HUMIDITY_LED_IDLE);
+    }
+
+    osDelay(250);
   }
 
   /* USER CODE END 5 */
 }
+
 /**
   * @brief  Period elapsed callback in non blocking mode
   * @note   This function is called  when TIM5 interrupt took place, inside
