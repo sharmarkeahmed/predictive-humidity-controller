@@ -75,7 +75,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2;
 
 SPI_HandleTypeDef hspi1;
 
@@ -159,7 +159,7 @@ static void MX_TIM1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
-static void MX_I2C1_Init(void);
+static void MX_I2C2_Init(void);
 void StartDefaultTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -204,7 +204,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
-  MX_I2C1_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   /* USER CODE END 2 */
 
@@ -306,33 +306,56 @@ void SystemClock_Config(void)
   * @param None
   * @retval None
   */
-static void MX_I2C1_Init(void)
+//static void MX_I2C1_Init(void)
+//{
+//
+//  /* USER CODE BEGIN I2C1_Init 0 */
+//
+//  /* USER CODE END I2C1_Init 0 */
+//
+//  /* USER CODE BEGIN I2C1_Init 1 */
+//
+//  /* USER CODE END I2C1_Init 1 */
+//  hi2c1.Instance = I2C1;
+//  hi2c1.Init.ClockSpeed = 100000;
+//  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+//  hi2c1.Init.OwnAddress1 = 0;
+//  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+//  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+//  hi2c1.Init.OwnAddress2 = 0;
+//  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+//  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+//  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+//  {
+//    Error_Handler();
+//  }
+//}
+
+static void MX_I2C2_Init(void)
 {
+  /* USER CODE BEGIN I2C2_Init 0 */
 
-  /* USER CODE BEGIN I2C1_Init 0 */
+  /* USER CODE END I2C2_Init 0 */
 
-  /* USER CODE END I2C1_Init 0 */
+  /* USER CODE BEGIN I2C2_Init 1 */
 
-  /* USER CODE BEGIN I2C1_Init 1 */
-
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 100000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
+  /* USER CODE BEGIN I2C2_Init 2 */
 
-  /* USER CODE END I2C1_Init 2 */
-
+  /* USER CODE END I2C2_Init 2 */
 }
 
 /**
@@ -956,52 +979,125 @@ void StartLCDTask(void *argument)
     // ===== CLEAR SCREEN =====
     ILI9341_fillScreen(&tft, ILI9341_BLACK);
 
-    // ===== CALIBRATION =====
-    // calibrate_touchscreen(&ts, &tft);
+    // Static title
+    ILI9341_setTextColor(&tft, ILI9341_WHITE);
+    ILI9341_setTextSize(&tft, 2);
+    ILI9341_setCursor(&tft, 10, 10);
+    ILI9341_writeString(&tft, "Forecast:");
 
-    // ===== MAIN LOOP =====
     for (;;)
     {
-        // ===== ALWAYS UPDATE DISPLAY =====
-
-        ILI9341_setTextColor(&tft, ILI9341_WHITE);
-        ILI9341_setTextSize(&tft, 2);
-
-        ILI9341_setCursor(&tft, 10, 10);
-        ILI9341_writeString(&tft, "Forecast:");
-
         char buf[32];
 
-        for (int i = 0; i < 8; i++)
+        // ===== FORECAST (3 entries) =====
+        if (g_esp8266_forecast_valid)
         {
-            int y = 40 + i * 20;
-            int temp10 = (int)(g_esp8266_forecast.temperature_f[i] * 10);
-            // clear ONLY this row
-            ILI9341_fillRect(&tft, 10, y, 220, 18, ILI9341_BLACK);
+            for (int i = 0; i < 3; i++)
+            {
+                int y = 40 + i * 20;
+                int temp10 = (int)(g_esp8266_forecast.temperature_f[i] * 10);
+
+                ILI9341_fillRect(&tft, 10, y, 220, 18, ILI9341_BLACK);
+
+                snprintf(buf, sizeof(buf),
+                         "%02d  %3d.%dF  %2d%%",
+                         i,
+                         temp10 / 10,
+                         abs(temp10 % 10),
+                         g_esp8266_forecast.humidity_percent[i]);
+
+                ILI9341_setCursor(&tft, 10, y);
+                ILI9341_writeString(&tft, buf);
+            }
+        }
+        else
+        {
+            ILI9341_setCursor(&tft, 10, 40);
+            ILI9341_writeString(&tft, "No Forecast");
+        }
+
+        // ===== SENSOR =====
+        int sensor_y = 40 + 3 * 20 + 10;
+
+        ILI9341_fillRect(&tft, 10, sensor_y, 220, 50, ILI9341_BLACK);
+
+
+        if (g_sht3x_sample_valid)
+        {
+            ILI9341_setTextColor(&tft, ILI9341_GREEN);
 
             snprintf(buf, sizeof(buf),
-                     "%02d:%3d.%dF %3d%%",
-                     i,
-                     temp10 / 10,
-                     abs(temp10 % 10),
-                     g_esp8266_forecast.humidity_percent[i]);
+                     "Hum:  %.1f%%",
+                     g_sht3x_sample.humidity_percent);
+            ILI9341_setCursor(&tft, 10, sensor_y + 20);
+            ILI9341_writeString(&tft, buf);
 
-            ILI9341_setCursor(&tft, 10, y);
+            snprintf(buf, sizeof(buf),
+                     "Temp: %.1fC",
+                     g_sht3x_sample.temperature_c);
+            ILI9341_setCursor(&tft, 10, sensor_y + 40);
             ILI9341_writeString(&tft, buf);
         }
-
-        // ===== OPTIONAL TOUCH HANDLING =====
-        if (XPT2046_touched(&ts))
+        else
         {
-            TS_Point p = XPT2046_getPoint(&ts);
-
-            int16_t px = (p.x * ILI9341_width(&tft)) / 4096;
-            int16_t py = (p.y * ILI9341_height(&tft)) / 4096;
-
-            ILI9341_fillCircle(&tft, px, py, 4, ILI9341_RED);
+            ILI9341_setTextColor(&tft, ILI9341_RED);
+            ILI9341_setCursor(&tft, 10, sensor_y + 20);
+            ILI9341_writeString(&tft, "Sensor Error");
         }
 
-        osDelay(500); // update twice per second
+        // ===== CONTROL =====
+        int control_y = sensor_y + 70;
+
+        ILI9341_fillRect(&tft, 10, control_y, 220, 120, ILI9341_BLACK);
+
+        // Setpoint
+        ILI9341_setTextColor(&tft, ILI9341_CYAN);
+        snprintf(buf, sizeof(buf),
+                 "SP: %.1f%%",
+                 g_target_humidity);
+        ILI9341_setCursor(&tft, 10, control_y + 20);
+        ILI9341_writeString(&tft, buf);
+
+        // Humidifier
+        ILI9341_setTextColor(&tft,
+            g_humidifier_on ? ILI9341_GREEN : ILI9341_RED);
+
+        snprintf(buf, sizeof(buf),
+                 "Humid: %s",
+                 g_humidifier_on ? "ON" : "OFF");
+        ILI9341_setCursor(&tft, 10, control_y + 40);
+        ILI9341_writeString(&tft, buf);
+
+        // Dehumidifier
+        ILI9341_setTextColor(&tft,
+            g_dehumidifier_on ? ILI9341_GREEN : ILI9341_RED);
+
+        snprintf(buf, sizeof(buf),
+                 "Dehum: %s",
+                 g_dehumidifier_on ? "ON" : "OFF");
+        ILI9341_setCursor(&tft, 10, control_y + 60);
+        ILI9341_writeString(&tft, buf);
+
+        // Mode
+        ILI9341_setTextColor(&tft, ILI9341_YELLOW);
+        snprintf(buf, sizeof(buf),
+                 "Mode: %s",
+                 g_control_mode == MODE_AUTO ? "AUTO" :
+                 g_control_mode == MODE_MANUAL ? "MAN" : "CAL");
+
+        ILI9341_setCursor(&tft, 10, control_y + 80);
+        ILI9341_writeString(&tft, buf);
+
+        // Rate
+        ILI9341_setTextColor(&tft, ILI9341_MAGENTA);
+        snprintf(buf, sizeof(buf),
+                 "Rate: %.2f%%/m",
+                 g_measured_rate);
+
+        ILI9341_setCursor(&tft, 10, control_y + 100);
+        ILI9341_writeString(&tft, buf);
+
+        osDelay(500);
     }
 }
 
@@ -1019,7 +1115,7 @@ void StartSht3xTask(void *argument)
   {
     if (!sht3x_sensor.initialized)
     {
-      g_sht3x_sensor_ready = sht3x_init(&sht3x_sensor, &hi2c1, SHT3X_I2C_ADDRESS);
+      g_sht3x_sensor_ready = sht3x_init(&sht3x_sensor, &hi2c2, SHT3X_I2C_ADDRESS);
       g_sht3x_last_error   = sht3x_sensor.last_error;
 
       if (!g_sht3x_sensor_ready)
@@ -1062,22 +1158,17 @@ void StartControlTask(void *argument)
 
     for (;;)
     {
-    	static float fake_humidity = 45.0f;
-
-    	// Simple system response model
-    	float response = (g_control_pwm / 100.0f) * 0.2f;  // tune this
-    	fake_humidity += response;
-
-    	// Clamp realistic humidity
-    	if (fake_humidity > 100) fake_humidity = 100;
-    	if (fake_humidity < 0)   fake_humidity = 0;
-
-    	// Feed into your system
-    	g_sht3x_sample.humidity_percent = fake_humidity;
-    	g_sht3x_sample.sample_tick = HAL_GetTick();
-    	g_sht3x_sample_valid = true;
+        // Run control loop (uses real sensor + forecast)
         ControlLoop_Update();
-        osDelay(50);
+
+        // Example:
+        // HAL_GPIO_WritePin(HUMIDIFIER_GPIO_Port, HUMIDIFIER_Pin,
+        //                   g_humidifier_on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        //
+        // HAL_GPIO_WritePin(DEHUMIDIFIER_GPIO_Port, DEHUMIDIFIER_Pin,
+        //                   g_dehumidifier_on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
+        osDelay(500);  // match sensor update rate (~0.5–1 sec is ideal)
     }
 }
 /* USER CODE END 4 */
