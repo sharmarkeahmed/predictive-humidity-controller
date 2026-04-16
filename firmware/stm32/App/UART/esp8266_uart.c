@@ -11,6 +11,8 @@ bool esp8266_uart_init(esp8266_uart_t *state, UART_HandleTypeDef *huart)
     state->initialized = true;
     state->last_result = ESP8266_UART_RESULT_OK;
     state->last_hal_status = HAL_OK;
+    state->tx_in_progress = false;
+    state->tx_done = false;
 
     /* Start interrupt reception */
     HAL_UART_Receive_IT(state->huart, &state->rx_byte, 1);
@@ -88,3 +90,46 @@ void esp8266_uart_clear_forecast_flag(esp8266_uart_t *state)
     if (!state) return;
     state->forecast_ready = false;
 }
+
+bool esp8266_uart_send_status(esp8266_uart_t *state,
+                              const esp8266_tx_status_t *status)
+{
+    uint8_t *payload;
+
+    if (!state || !state->initialized || !status) return false;
+    if (state->tx_in_progress) return false;
+
+    state->tx_frame_buffer[0] = ESP8266_UART_START_BYTE;
+    payload = &state->tx_frame_buffer[1];
+
+    memcpy(payload, status, sizeof(*status));
+
+    state->tx_frame_buffer[ESP8266_UART_TX_FRAME_SIZE - 1] = ESP8266_UART_END_BYTE;
+
+    state->tx_done = false;
+    state->tx_in_progress = true;
+
+    state->last_hal_status = HAL_UART_Transmit_IT(state->huart,
+                                                  state->tx_frame_buffer,
+                                                  ESP8266_UART_TX_FRAME_SIZE);
+
+    if (state->last_hal_status != HAL_OK)
+    {
+        state->tx_in_progress = false;
+        state->last_result = ESP8266_UART_RESULT_UART_ERROR;
+        return false;
+    }
+
+    state->last_result = ESP8266_UART_RESULT_OK;
+    return true;
+}
+
+void esp8266_uart_tx_complete(esp8266_uart_t *state)
+{
+    if (!state) return;
+
+    state->tx_in_progress = false;
+    state->tx_done = true;
+    state->tx_count++;
+}
+

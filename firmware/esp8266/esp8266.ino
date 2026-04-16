@@ -5,6 +5,37 @@
 
 #define STM_BAUD 115200
 
+#define UART_START_BYTE 0xAA
+#define UART_END_BYTE   0x55
+
+#define STM_RX_PAYLOAD_SIZE 24
+#define STM_RX_FRAME_SIZE   (1 + STM_RX_PAYLOAD_SIZE + 1)
+
+uint8_t stmRxBuffer[STM_RX_FRAME_SIZE];
+uint8_t stmRxIndex = 0;
+
+typedef struct
+{
+  float humidity_percent;
+  float control_signal;
+  float temperature_c;
+  float target_humidity;
+  float measured_rate;
+  uint8_t humidifier_on;
+  uint8_t dehumidifier_on;
+  uint8_t control_mode;
+  uint8_t sensor_valid;
+} Stm32TxStatus;
+
+Stm32TxStatus latestStm32Status;
+bool stm32StatusValid = false;
+
+void processStm32Byte(uint8_t byte);
+void handleStm32Frame(const uint8_t *frame);
+
+
+
+
 const char* WIFI_SSID = "LIT-FAM";
 const char* WIFI_PASS = "Demell2023";
 // const char* WIFI_SSID = "UofM-IoT";
@@ -65,6 +96,11 @@ void setup() {
 
 void loop() {
 
+  while (Serial.available() > 0) {
+    processStm32Byte((uint8_t)Serial.read());
+  }
+
+
   unsigned long currentTime = millis();
 
   // API Task
@@ -102,6 +138,7 @@ void loop() {
     sendForecastUART();
     lastUartTime = currentTime;
   }
+  
 }
 
 // HTTP request function, gets resources from servers at specified server names/URLs and returns them as a JSON string
@@ -235,4 +272,55 @@ void sendForecastUART() {
   }
   Serial.println();
 }
+
+void processStm32Byte(uint8_t byte)
+{
+  if (stmRxIndex == 0 && byte != UART_START_BYTE) {
+    return;
+  }
+
+  stmRxBuffer[stmRxIndex++] = byte;
+
+  if (stmRxIndex >= STM_RX_FRAME_SIZE) {
+    if (stmRxBuffer[STM_RX_FRAME_SIZE - 1] == UART_END_BYTE) {
+      handleStm32Frame(stmRxBuffer);
+    }
+    stmRxIndex = 0;
+  }
+}
+
+void handleStm32Frame(const uint8_t *frame)
+{
+  memcpy(&latestStm32Status, &frame[1], sizeof(latestStm32Status));
+  stm32StatusValid = true;
+
+  Serial.println("STM32 status received:");
+  Serial.print("Humidity: ");
+  Serial.println(latestStm32Status.humidity_percent);
+
+  Serial.print("Control signal: ");
+  Serial.println(latestStm32Status.control_signal);
+
+  Serial.print("Temperature C: ");
+  Serial.println(latestStm32Status.temperature_c);
+
+  Serial.print("Target humidity: ");
+  Serial.println(latestStm32Status.target_humidity);
+
+  Serial.print("Measured rate: ");
+  Serial.println(latestStm32Status.measured_rate);
+
+  Serial.print("Humidifier: ");
+  Serial.println(latestStm32Status.humidifier_on);
+
+  Serial.print("Dehumidifier: ");
+  Serial.println(latestStm32Status.dehumidifier_on);
+
+  Serial.print("Control mode: ");
+  Serial.println(latestStm32Status.control_mode);
+
+  Serial.print("Sensor valid: ");
+  Serial.println(latestStm32Status.sensor_valid);
+}
+
 

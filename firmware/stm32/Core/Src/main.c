@@ -47,7 +47,7 @@ typedef enum
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-#define ENABLE_ESP8266_UART  0
+#define ENABLE_ESP8266_UART  1
 #define ENABLE_SHT3X         1
 #define ENABLE_LCD_SPI1      1
 
@@ -92,7 +92,6 @@ SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim1;
 
-UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* Definitions for defaultTask */
@@ -160,7 +159,6 @@ volatile bool                g_sht3x_sample_valid = false;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
-static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_I2C2_Init(void);
@@ -174,7 +172,6 @@ void StartLCDTask(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-extern esp8266_uart_t esp8266_uart_state;
 /* USER CODE END 0 */
 
 /**
@@ -204,7 +201,6 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_TIM1_Init();
-  MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
   MX_I2C2_Init();
@@ -443,39 +439,6 @@ static void MX_TIM1_Init(void)
 }
 
 /**
-  * @brief USART1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_USART1_UART_Init(void)
-{
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-
-  /* USER CODE END USART1_Init 2 */
-
-}
-
-/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -641,6 +604,7 @@ static void HumidityLED_UpdateFromTrend(float current_humidity,
  * -------------------------------------------------------------------------- */
 #define ESP8266_UART_TASK_RX_TIMEOUT_MS  30000U
 #define ESP8266_UART_TASK_RETRY_DELAY_MS   100U
+#define ESP8266_UART_TASK_REQUEST_PERIOD_MS 1000U // one status frame each second
 
 #define SHT3X_I2C_ADDRESS     0x44U
 #define SHT3X_TASK_PERIOD_MS  5000U
@@ -651,12 +615,62 @@ static void HumidityLED_UpdateFromTrend(float current_humidity,
  * -------------------------------------------------------------------------- */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART1)
+  if (huart->Instance == USART2)
   {
     esp8266_uart_rx_byte(&esp8266_uart_state, esp8266_uart_state.rx_byte);
-    HAL_UART_Receive_IT(&huart1, &esp8266_uart_state.rx_byte, 1);
+    HAL_UART_Receive_IT(&huart2, &esp8266_uart_state.rx_byte, 1);
   }
 }
+
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART2)
+  {
+    esp8266_uart_tx_complete(&esp8266_uart_state);
+  }
+}
+
+
+void StartEsp8266Task(void *argument)
+{
+  (void)argument;
+  #if ENABLE_ESP8266_UART
+  esp8266_tx_status_t tx_status;
+
+  g_esp8266_uart_ready = esp8266_uart_init(&esp8266_uart_state, &huart2);
+  g_esp8266_last_error = esp8266_uart_state.last_hal_status;
+
+  if (!g_esp8266_uart_ready)
+  {
+    g_esp8266_forecast_valid = false;
+    for (;;)
+    {
+      osDelay(1000);
+    }
+  }
+
+  for (;;)
+  {
+    if (g_sht3x_sample_valid)
+    {
+      tx_status.humidity_percent = g_sht3x_sample.humidity_percent;
+      tx_status.temperature_c    = g_sht3x_sample.temperature_c;
+      tx_status.control_signal   = 50.0f;
+
+      if (!esp8266_uart_send_status(&esp8266_uart_state, &tx_status))
+      {
+        g_esp8266_last_error = esp8266_uart_state.last_hal_status;
+      }
+    }
+
+    osDelay(1000);
+  }
+  #endif
+}
+
+
+
 
 /* --------------------------------------------------------------------------
  * HAL_GPIO_EXTI_Callback
